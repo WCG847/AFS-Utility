@@ -1,4 +1,4 @@
-import struct
+﻿import struct
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 import json
@@ -33,9 +33,7 @@ class AFSUtility:
             show="headings",
         )
         for col in ("name", "pointer", "size", "comments"):
-            self.tree.heading(
-                col, text=col.capitalize(), command=lambda c=col: self.sort_by_column(c)
-            )
+            self.tree.heading(col, text=col.capitalize(), command=lambda c=col: self.sort_by_column(c))
 
         self.tree.column("name", width=200)
         self.tree.column("pointer", width=100)
@@ -57,18 +55,10 @@ class AFSUtility:
 
         # Context menu for right-click options
         self.context_menu = tk.Menu(root, tearoff=0)
-        self.context_menu.add_command(
-            label="Extract Selected File", command=self.extract_selected_file
-        )
-        self.context_menu.add_command(
-            label="Inject into Selected File", command=self.inject_file
-        )
-        self.context_menu.add_command(
-            label="Delete Selected File", command=self.delete_file
-        )
-        self.context_menu.add_command(
-            label="Upload Description.json", command=self.upload_description_json
-        )
+        self.context_menu.add_command(label="Extract Selected File", command=self.extract_selected_file)
+        self.context_menu.add_command(label="Inject into Selected File", command=self.inject_file)
+        self.context_menu.add_command(label="Delete Selected File", command=self.delete_file)
+        self.context_menu.add_command(label="Upload Description.json", command=self.upload_description_json)
 
         # Binding right-click key
         self.tree.bind("<Button-3>", self.show_context_menu)
@@ -94,10 +84,25 @@ class AFSUtility:
         if afs_path:
             self.afs_path = afs_path  # Store the AFS path for later usage
             try:
+                # Attempt to load the descriptions from the JSON file
+                self.load_description_json()
+
                 with open(self.afs_path, "rb") as afs_file:
                     self.parse_afs(afs_file)
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to load AFS file: {e}")
+
+    def load_description_json(self):
+        """Load descriptions from description.json if it exists."""
+        appdata_dir = os.getenv("LOCALAPPDATA") + "\\WCG847\\AFSTool"
+        description_path = os.path.join(appdata_dir, "description.json")
+
+        if os.path.exists(description_path):
+            try:
+                with open(description_path, "r") as json_file:
+                    self.descriptions = json.load(json_file)
+            except Exception as e:
+                messagebox.showwarning("Warning", f"Could not load descriptions: {e}")
 
     def parse_afs(self, afs_file):
         # Clear previous entries
@@ -279,7 +284,7 @@ class AFSUtility:
 
         # Update headings to indicate sort order
         self.tree.heading(
-            column, text=f"{column.capitalize()} {'?' if self.sort_ascending else '?'}"
+            column, text=f"{column.capitalize()} {'↑' if self.sort_ascending else '↓'}"
         )
 
     def inject_file(self):
