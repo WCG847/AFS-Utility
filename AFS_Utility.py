@@ -5,6 +5,7 @@ import json
 import os
 from decimal import Decimal
 
+
 class AFSUtility:
     def __init__(self, root):
         self.root = root
@@ -23,7 +24,9 @@ class AFSUtility:
 
         # Create a Treeview with vertical scrollbar, with "name" as the first column
         self.tree = ttk.Treeview(
-            self.tree_frame, columns=("name", "pointer", "size", "comments"), show="headings"
+            self.tree_frame,
+            columns=("name", "pointer", "size", "comments"),
+            show="headings",
         )
         self.tree.heading("name", text="File Name")
         self.tree.heading("pointer", text="File Pointer")
@@ -126,8 +129,12 @@ class AFSUtility:
             pointer, size = self.toc_entries[idx]
             name = self.file_names[idx]
             formatted_size = self.format_size(size)
-            description = self.descriptions.get(name, "")  # Get description if available
-            self.tree.insert("", "end", values=(name, f"0x{pointer:X}", formatted_size, description))
+            description = self.descriptions.get(
+                name, ""
+            )  # Get description if available
+            self.tree.insert(
+                "", "end", values=(name, f"0x{pointer:X}", formatted_size, description)
+            )
 
     def format_size(self, size):
         if size == 0:
@@ -159,10 +166,14 @@ class AFSUtility:
         )
         if save_path:
             try:
-                with open(save_path, "wb") as output_file, open(self.afs_path, "rb") as afs_file:
+                with open(save_path, "wb") as output_file, open(
+                    self.afs_path, "rb"
+                ) as afs_file:
                     afs_file.seek(pointer)
                     output_file.write(afs_file.read(size))
-                messagebox.showinfo("Success", f"File '{file_name}' extracted successfully.")
+                messagebox.showinfo(
+                    "Success", f"File '{file_name}' extracted successfully."
+                )
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to extract file: {e}")
 
@@ -173,7 +184,9 @@ class AFSUtility:
             return
         file_path = filedialog.askopenfilename(title="Select File to Inject")
         if file_path:
-            messagebox.showinfo("Not Implemented", "File injection is not fully implemented.")
+            messagebox.showinfo(
+                "Not Implemented", "File injection is not fully implemented."
+            )
 
     def delete_file(self):
         selected_item = self.tree.selection()
@@ -181,23 +194,35 @@ class AFSUtility:
             messagebox.showwarning("Warning", "No file selected.")
             return
         file_index = self.tree.index(selected_item[0])
-        messagebox.showinfo("Not Implemented", "File deletion is not fully implemented.")
+        messagebox.showinfo(
+            "Not Implemented", "File deletion is not fully implemented."
+        )
 
     def add_file(self):
         file_path = filedialog.askopenfilename(title="Select File to Add")
         if file_path:
-            file_name = simpledialog.askstring("File Name", "Enter a name for the new file (up to 32 chars):")
+            file_name = simpledialog.askstring(
+                "File Name", "Enter a name for the new file (up to 32 chars):"
+            )
             if file_name and len(file_name) <= 32:
-                messagebox.showinfo("Not Implemented", "Add file functionality is not fully implemented.")
+                messagebox.showinfo(
+                    "Not Implemented",
+                    "Add file functionality is not fully implemented.",
+                )
 
     def upload_description_json(self):
-        messagebox.showinfo("Description Format", "The JSON file should have the following format:\n"
-                                                  '{\n'
-                                                  '  "file_name_1": "Description of file 1",\n'
-                                                  '  "file_name_2": "Description of file 2",\n'
-                                                  '  ...\n'
-                                                  '}')
-        json_path = filedialog.askopenfilename(title="Select Description.json", filetypes=[("JSON files", "*.json")])
+        messagebox.showinfo(
+            "Description Format",
+            "The JSON file should have the following format:\n"
+            "{\n"
+            '  "file_name_1": "Description of file 1",\n'
+            '  "file_name_2": "Description of file 2",\n'
+            "  ...\n"
+            "}",
+        )
+        json_path = filedialog.askopenfilename(
+            title="Select Description.json", filetypes=[("JSON files", "*.json")]
+        )
         if json_path:
             try:
                 with open(json_path, "r") as json_file:
@@ -205,7 +230,9 @@ class AFSUtility:
                 # Save to AppData directory
                 appdata_dir = os.getenv("LOCALAPPDATA") + "\\WCG847\\AFSTool"
                 os.makedirs(appdata_dir, exist_ok=True)
-                with open(os.path.join(appdata_dir, "description.json"), "w") as appdata_json:
+                with open(
+                    os.path.join(appdata_dir, "description.json"), "w"
+                ) as appdata_json:
                     json.dump(self.descriptions, appdata_json)
                 # Refresh Treeview with new descriptions
                 self.refresh_treeview_with_descriptions()
@@ -220,7 +247,9 @@ class AFSUtility:
             name = self.file_names[idx]
             formatted_size = self.format_size(size)
             description = self.descriptions.get(name, "")
-            self.tree.insert("", "end", values=(name, f"0x{pointer:X}", formatted_size, description))
+            self.tree.insert(
+                "", "end", values=(name, f"0x{pointer:X}", formatted_size, description)
+            )
 
 
 if __name__ == "__main__":
