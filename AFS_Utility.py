@@ -5,18 +5,17 @@ import json
 import os
 from decimal import Decimal
 
-
 class AFSUtility:
     def __init__(self, root):
         self.root = root
         self.root.title("AFS Utility")
 
-        # Initialise AFS data storage
-        self.toc_entries = []  # Stores pointers and sizes of files
-        self.file_names = []  # Stores file names
-        self.descriptions = {}  # Stores descriptions from JSON
-        self.file_count = 0  # Number of files including footer
-        self.afs_path = None  # Stores path of currently loaded AFS file
+        # Initialize AFS data storage
+        self.toc_entries = []
+        self.file_names = []
+        self.descriptions = {}
+        self.file_count = 0
+        self.afs_path = None
 
         # Sort tracking
         self.sort_column = None
@@ -76,6 +75,32 @@ class AFSUtility:
         tools_menu = tk.Menu(self.menu, tearoff=0)
         self.menu.add_cascade(label="Tools", menu=tools_menu)
         tools_menu.add_command(label="Add File", command=self.add_file)
+        tools_menu.add_command(label="Mass Extract", command=self.mass_extract)  # Added mass extract option
+
+    def mass_extract(self):
+        """Extract all files in the AFS to a selected directory."""
+        if not self.afs_path:
+            messagebox.showwarning("Warning", "No AFS file loaded.")
+            return
+
+        directory = filedialog.askdirectory(title="Select Directory for Mass Extraction")
+        if not directory:
+            return
+
+        try:
+            with open(self.afs_path, "rb") as afs_file:
+                for idx, (pointer, size) in enumerate(self.toc_entries):
+                    file_name = self.file_names[idx]
+                    afs_file.seek(pointer)
+                    file_data = afs_file.read(size)
+                    file_path = os.path.join(directory, file_name)
+
+                    with open(file_path, "wb") as output_file:
+                        output_file.write(file_data)
+
+            messagebox.showinfo("Success", "All files extracted successfully.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to extract files: {e}")
 
     def load_afs_file(self):
         afs_path = filedialog.askopenfilename(
