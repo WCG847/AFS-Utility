@@ -93,7 +93,7 @@ class AFSUtility:
                 messagebox.showerror("Error", f"Failed to load AFS file: {e}")
 
     def parse_afs(self, afs_file):
-
+        # Clear previous entries
         for item in self.tree.get_children():
             self.tree.delete(item)
 
@@ -105,7 +105,7 @@ class AFSUtility:
             )
             return
 
-        # No. of files in AFS
+        # Number of files in AFS
         self.file_count = struct.unpack("<I", afs_file.read(4))[0]
 
         # Start of TOC
@@ -115,23 +115,63 @@ class AFSUtility:
             size = struct.unpack("<I", afs_file.read(4))[0]
             self.toc_entries.append((pointer, size))
 
-        # Parse footer block with file names
-        afs_file.seek(self.toc_entries[-1][0] + self.toc_entries[-1][1])
-        self.file_names = []
+        # Calculate expected footer start location
+        last_entry_pointer, last_entry_size = self.toc_entries[-1]
+        expected_footer_start = last_entry_pointer + last_entry_size
 
+        # Align to nearest 0x800 boundary if necessary
+        if expected_footer_start % 0x800 != 0:
+            aligned_footer_start = (expected_footer_start + 0x800) & ~0x7FF
+            print(f"Non-aligned footer detected. Aligning to nearest 0x800 boundary.")
+            print(f"Adjusted footer start: 0x{aligned_footer_start:X}")
+            expected_footer_start = aligned_footer_start
+        else:
+            print(f"Footer is already aligned at: 0x{expected_footer_start:X}")
+
+        afs_file.seek(expected_footer_start)
+
+        # Print the final footer start location for debugging
+        print(f"Final footer start: 0x{expected_footer_start:X}")
+
+        # Attempt to parse footer block with file names
+        self.file_names = []
         for _ in range(self.file_count):
             name = afs_file.read(0x20).decode("latin1").strip("\x00")
             afs_file.read(0x10)  # Skip unknown flags
             self.file_names.append(name)
 
-        # Fill Treeview with parsed file data and descriptions
-        for idx in range(self.file_count - 1):
+        # Verify file names were parsed correctly
+        if len(self.file_names) != self.file_count:
+            messagebox.showerror(
+                "Parsing Error",
+                "The number of file names does not match the file count.",
+            )
+            return
+
+        # Print the parsed file names for verification
+        print("Parsed file names:", self.file_names)
+
+        # Fill Treeview with parsed data if header matches expected 2 or 3-byte patterns
+        for idx in range(self.file_count):
             pointer, size = self.toc_entries[idx]
+
+            # Seek to the file's starting position and read the first 4 bytes (for checking 2 or 3 bytes)
+            afs_file.seek(pointer)
+            file_header = afs_file.read(4)
+
+            # Define allowed headers for ADX and SFD files
+            allowed_headers = {b"\x80\x00", b"\x00\x00"}
+
+            # Check if the header is valid for ADX or SFD files
+            if file_header[:2] not in allowed_headers:
+                print(
+                    f"Skipping file {self.file_names[idx]} due to invalid header {file_header.hex()}"
+                )
+                continue  # Skip this file if it does not have the expected magic header
+
             name = self.file_names[idx]
             formatted_size = self.format_size(size)
-            description = self.descriptions.get(
-                name, ""
-            )  # Get description if available
+            description = self.descriptions.get(name, "")
             self.tree.insert(
                 "", "end", values=(name, f"0x{pointer:X}", formatted_size, description)
             )
