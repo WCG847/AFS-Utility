@@ -18,6 +18,10 @@ class AFSUtility:
         self.file_count = 0  # Number of files including footer
         self.afs_path = None  # Stores path of currently loaded AFS file
 
+        # Sort tracking
+        self.sort_column = None
+        self.sort_ascending = True
+
         # Treeview widget with scrollbar
         self.tree_frame = tk.Frame(root)
         self.tree_frame.pack(fill="both", expand=True)
@@ -28,10 +32,10 @@ class AFSUtility:
             columns=("name", "pointer", "size", "comments"),
             show="headings",
         )
-        self.tree.heading("name", text="File Name")
-        self.tree.heading("pointer", text="File Pointer")
-        self.tree.heading("size", text="File Size")
-        self.tree.heading("comments", text="Comments")
+        for col in ("name", "pointer", "size", "comments"):
+            self.tree.heading(
+                col, text=col.capitalize(), command=lambda c=col: self.sort_by_column(c)
+            )
 
         self.tree.column("name", width=200)
         self.tree.column("pointer", width=100)
@@ -48,7 +52,10 @@ class AFSUtility:
         self.tree_frame.grid_rowconfigure(0, weight=1)
         self.tree_frame.grid_columnconfigure(0, weight=1)
 
-        # Right-click context menu
+        # Bind double-click on "comments" to edit comments
+        self.tree.bind("<Double-1>", self.on_double_click)
+
+        # Context menu for right-click options
         self.context_menu = tk.Menu(root, tearoff=0)
         self.context_menu.add_command(
             label="Extract Selected File", command=self.extract_selected_file
@@ -216,6 +223,64 @@ class AFSUtility:
                 )
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to extract file: {e}")
+
+    def on_double_click(self, event):
+        """Handle double-click to edit comments."""
+        item_id = self.tree.identify_row(event.y)
+        column = self.tree.identify_column(event.x)
+
+        # Check if double-click is on the "comments" column (fourth column)
+        if column == "#4" and item_id:
+            current_comment = self.tree.item(item_id, "values")[3]
+            new_comment = simpledialog.askstring(
+                "Edit Comment", "Enter your comment:", initialvalue=current_comment
+            )
+
+            if new_comment is not None:
+                # Update the comment in the tree view
+                item_values = list(self.tree.item(item_id, "values"))
+                item_values[3] = new_comment
+                self.tree.item(item_id, values=item_values)
+
+                # Update descriptions dictionary and save to description.json
+                file_name = item_values[0]
+                self.descriptions[file_name] = new_comment
+                self.save_description_json()
+
+    def save_description_json(self):
+        """Save current descriptions to description.json."""
+        appdata_dir = os.getenv("LOCALAPPDATA") + "\\WCG847\\AFSTool"
+        os.makedirs(appdata_dir, exist_ok=True)
+        description_path = os.path.join(appdata_dir, "description.json")
+        with open(description_path, "w") as json_file:
+            json.dump(self.descriptions, json_file)
+
+    def sort_by_column(self, column):
+        """Sort treeview by the given column."""
+        if self.sort_column == column:
+            self.sort_ascending = not self.sort_ascending
+        else:
+            self.sort_column = column
+            self.sort_ascending = True
+
+        data = [
+            (self.tree.set(item, column), item) for item in self.tree.get_children("")
+        ]
+        if column in ("pointer", "size"):
+            data.sort(
+                key=lambda t: int(t[0].replace("0x", ""), 16),
+                reverse=not self.sort_ascending,
+            )
+        else:
+            data.sort(reverse=not self.sort_ascending)
+
+        for index, (_, item) in enumerate(data):
+            self.tree.move(item, "", index)
+
+        # Update headings to indicate sort order
+        self.tree.heading(
+            column, text=f"{column.capitalize()} {'?' if self.sort_ascending else '?'}"
+        )
 
     def inject_file(self):
         selected_item = self.tree.selection()
