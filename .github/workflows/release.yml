@@ -1,0 +1,76 @@
+name: Build and Release Python to Windows EXE
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Triggers only on version tags like v1.0.0
+
+jobs:
+  build:
+    name: Build Python EXE
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'  # Specify the Python version needed
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt  # Install dependencies specified in requirements.txt
+        pip install pyinstaller          # Install PyInstaller for building the executable
+
+    - name: Build EXE with PyInstaller
+      run: |
+        pyinstaller --onefile --windowed AFS_Utility.py
+      env:
+        PYTHONPATH: ${{ github.workspace }}
+
+    - name: Archive Executable
+      run: |
+        mkdir dist\release
+        move dist\main.exe dist\release\MyApp-v${{ github.ref_name }}.exe  # Rename executable with version
+
+    - name: Upload Build Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: MyApp-v${{ github.ref_name }}.exe
+        path: dist/release/MyApp-v${{ github.ref_name }}.exe
+
+  release:
+    name: Release EXE on GitHub
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+    - name: Download Build Artifact
+      uses: actions/download-artifact@v3
+      with:
+        name: MyApp-v${{ github.ref_name }}.exe
+        path: ./release
+
+    - name: Create GitHub Release
+      id: create_release
+      uses: actions/create-release@v1
+      with:
+        tag_name: ${{ github.ref_name }}
+        release_name: "Release ${{ github.ref_name }}"
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./release/MyApp-v${{ github.ref_name }}.exe
+        asset_name: MyApp-v${{ github.ref_name }}.exe
+        asset_content_type: application/octet-stream
