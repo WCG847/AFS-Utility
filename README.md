@@ -66,7 +66,7 @@ Contributions are welcome! If you'd like to contribute to the AFS Utility, pleas
 
 ## Licence
 
-This project is licenced under the GPL 3.0 Licence - see the [LICENSE](LICENSE) file for details.
+This project is licenced under the GPL 3.0 Licence - see the [LICENSE](LICENSE.txt) file for details.
 
 ---
 
