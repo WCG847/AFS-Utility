@@ -10,7 +10,7 @@ class AFSUtility:
         self.root = root
         self.root.title("AFS Utility")
 
-        # Initialize AFS data storage
+        # Initialise AFS data storage
         self.toc_entries = []
         self.file_names = []
         self.descriptions = {}
@@ -69,6 +69,7 @@ class AFSUtility:
         file_menu = tk.Menu(self.menu, tearoff=0)
         self.menu.add_cascade(label="File", menu=file_menu)
         file_menu.add_command(label="Open", command=self.load_afs_file)
+        file_menu.add_command(label="Create New AFS Archive", command=self.create_new_afs_archive)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=root.quit)
 
@@ -76,6 +77,85 @@ class AFSUtility:
         self.menu.add_cascade(label="Tools", menu=tools_menu)
         tools_menu.add_command(label="Add File", command=self.add_file)
         tools_menu.add_command(label="Mass Extract", command=self.mass_extract)  # Added mass extract option
+
+    def create_new_afs_archive(self):
+        """Creates a new AFS archive from selected files in a directory."""
+        folder_path = filedialog.askdirectory(title="Select Folder with Files for New AFS Archive")
+        if not folder_path:
+            return
+        
+        # Retrieve output file parameters from the user
+        output_file = filedialog.asksaveasfilename(
+            title="Save New AFS Archive As", defaultextension=".afs", filetypes=[("AFS Files", "*.afs")]
+        )
+        if not output_file:
+            return
+        
+        # Collect files in the selected directory
+        files = [f for f in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, f))]
+        
+        if not files:
+            messagebox.showwarning("No Files Found", "The selected folder does not contain any files.")
+            return
+
+        # Build the TOC and determine file sizes and pointers
+        toc_entries = []
+        file_names = []
+        file_data = []
+        pointer = 0x800  # Start data section after 0x800 offset for the header
+
+        # Read each file and append to data buffer
+        for file_name in files:
+            file_path = os.path.join(folder_path, file_name)
+            with open(file_path, "rb") as f:
+                data = f.read()
+                size = len(data)
+
+                # Append TOC entry (pointer and size)
+                toc_entries.append((pointer, size))
+                file_data.append(data)
+
+                # Append file name, ensuring it’s 32 bytes in length for the footer
+                file_names.append(file_name.ljust(32, '\x00'))
+
+                # Update pointer for the next file, aligning to 0x800
+                pointer += (size + 0x7FF) & ~0x7FF  # Align to next 0x800 boundary
+
+        # Write AFS archive to the specified output file
+        try:
+            with open(output_file, "wb") as afs_file:
+                # Write AFS header
+                afs_file.write(b"AFS\x00")  # AFS magic bytes
+                afs_file.write(struct.pack("<I", len(files)))  # Number of files
+                
+                # Write TOC entries
+                for toc_entry in toc_entries:
+                    afs_file.write(struct.pack("<II", *toc_entry))
+                
+                # Pad TOC to reach 0x800 offset for the data section
+                current_pos = afs_file.tell()
+                if current_pos < 0x800:
+                    afs_file.write(b'\x00' * (0x800 - current_pos))
+                
+                # Write each file's data, aligning each to 0x800 boundaries
+                for data in file_data:
+                    afs_file.write(data)
+                    padding = (0x800 - (len(data) % 0x800)) % 0x800
+                    afs_file.write(b'\x00' * padding)
+
+                # Write footer with file names
+                for name in file_names:
+                    afs_file.write(name.encode("latin1"))
+                    afs_file.write(b'\x00' * 0x10)  # 16-byte padding per file name entry
+                
+                # Add copyright footer (32 bytes)
+                copyright_footer = "© 2024 AFS Utility".ljust(32, '\x00')
+                afs_file.write(copyright_footer.encode("latin1"))
+
+            messagebox.showinfo("Success", "New AFS archive created successfully.")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to create AFS archive: {e}")
 
     def mass_extract(self):
         """Extract all files in the AFS to a selected directory."""
@@ -278,12 +358,16 @@ class AFSUtility:
                 self.save_description_json()
 
     def save_description_json(self):
-        """Save current descriptions to description.json."""
+        """Save current descriptions to description.json in the required format."""
         appdata_dir = os.getenv("LOCALAPPDATA") + "\\WCG847\\AFSTool"
         os.makedirs(appdata_dir, exist_ok=True)
         description_path = os.path.join(appdata_dir, "description.json")
+    
+        # Creating a dictionary with the specified structure
+        formatted_descriptions = {name: self.descriptions.get(name, "") for name in self.file_names}
+    
         with open(description_path, "w") as json_file:
-            json.dump(self.descriptions, json_file)
+            json.dump(formatted_descriptions, json_file, indent=2)  # Use indent for pretty printing
 
     def sort_by_column(self, column):
         """Sort treeview by the given column."""
