@@ -34,7 +34,7 @@ jobs:
     - name: Archive Executable
       run: |
         mkdir dist\release
-        move dist\main.exe dist\release\MyApp-v${{ github.ref_name }}.exe  # Rename executable with version
+        move dist\AFS_Utility.exe dist\release\MyApp-v${{ github.ref_name }}.exe  # Rename executable with version
 
     - name: Upload Build Artifact
       uses: actions/upload-artifact@v3
