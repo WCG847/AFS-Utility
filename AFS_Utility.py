@@ -21,7 +21,6 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 
-
 def write_minidump(exception_type, exception_value, tb):
     """Write a mini-dump to disk when a crash happens."""
     dump_dir = os.path.join(
@@ -113,17 +112,25 @@ class AFSUtility:
         # Create a Treeview with vertical scrollbar, with "name" as the first column
         self.tree = ttk.Treeview(
             self.tree_frame,
-            columns=("name", "pointer", "size", "comments"),
+            columns=("name", "pointer", "size", "Creation Date", "comments"),
             show="headings",
         )
-        for col in ("name", "pointer", "size", "comments"):
-            self.tree.heading(
-                col, text=col.capitalize(), command=partial(self.sort_by_column, col)
-            )
+        for col in ("name", "pointer", "size", "Creation Date", "comments"):
+            if col == "Creation Date":
+                self.tree.heading(
+                    col, text=col, command=partial(self.sort_by_column, col)
+                )
+            else:
+                self.tree.heading(
+                    col,
+                    text=col.capitalize(),
+                    command=partial(self.sort_by_column, col),
+                )
 
         self.tree.column("name", width=200)
         self.tree.column("pointer", width=100)
         self.tree.column("size", width=100)
+        self.tree.column("Creation Date", width=150)
         self.tree.column("comments", width=200)
 
         self.scrollbar = ttk.Scrollbar(
@@ -302,15 +309,41 @@ class AFSUtility:
                     padding = (0x800 - (len(data) % 0x800)) % 0x800
                     afs_file.write(b"\x00" * padding)
 
-                # Write footer with file names
-                for name in file_names:
-                    afs_file.write(name.encode("latin1"))
+                # Footer Writing
+                for idx, name in enumerate(file_names):
+                    afs_file.write(name.encode("latin1").ljust(0x20, b"\x00"))
+
+                    # Write file creation date (2 bytes each for YYMMDDHHMMSS)
+                    creation_date = datetime.datetime.now()
                     afs_file.write(
-                        b"\x00" * 0x10
-                    )  # 16-byte padding per file name entry
+                        struct.pack("<H", creation_date.year)
+                    )  # 2 bytes for year
+                    afs_file.write(
+                        struct.pack("<H", creation_date.month)
+                    )  # 2 bytes for month
+                    afs_file.write(
+                        struct.pack("<H", creation_date.day)
+                    )  # 2 bytes for day
+                    afs_file.write(
+                        struct.pack("<H", creation_date.hour)
+                    )  # 2 bytes for hour
+                    afs_file.write(
+                        struct.pack("<H", creation_date.minute)
+                    )  # 2 bytes for minute
+                    afs_file.write(
+                        struct.pack("<H", creation_date.second)
+                    )  # 2 bytes for second
+
+                    # Write 4-byte file size
+                    file_size = toc_entries[idx][1]
+                    afs_file.write(struct.pack("<I", file_size))
 
                 copyright_footer = "© 2024 AFS Utility".ljust(32, "\x00")
                 afs_file.write(copyright_footer.encode("latin1"))
+
+                current_pos = afs_file.tell()
+                padding_needed = (0x800 - (current_pos % 0x800)) % 0x800
+                afs_file.write(b"\x00" * padding_needed)  # Add padding to align
 
             # Notify success on the main thread
             self.root.after(
@@ -448,15 +481,35 @@ class AFSUtility:
 
         afs_file.seek(expected_footer_start)
 
-        # Print the final footer start location for debugging
-        logging.info(f"Final footer start: 0x{expected_footer_start:X}")
-
-        # Attempt to parse footer block with file names
         self.file_names = []
+        self.file_dates = []  # List to store parsed dates
+        self.file_sizes = []  # List to store parsed file sizes
+
         for _ in range(self.file_count):
+            # File name parsing
             name = afs_file.read(0x20).decode("latin1").strip("\x00")
-            afs_file.read(0x10)  # Skip unknown flags
             self.file_names.append(name)
+
+            # Read the creation date (formatted as YYMMDDHHMMSS in 2 bytes each)
+            year = struct.unpack("<H", afs_file.read(2))[0]
+            month = struct.unpack("<H", afs_file.read(2))[0]
+            day = struct.unpack("<H", afs_file.read(2))[0]
+            hour = struct.unpack("<H", afs_file.read(2))[0]
+            minute = struct.unpack("<H", afs_file.read(2))[0]
+            second = struct.unpack("<H", afs_file.read(2))[0]
+
+            file_date = datetime.datetime(year, month, day, hour, minute, second)
+            self.file_dates.append(
+                file_date.strftime("%Y-%m-%d %H:%M:%S")
+            )  # Store formatted date
+
+            # Read 4-byte file size
+            file_size = struct.unpack("<I", afs_file.read(4))[0]
+            self.file_sizes.append(file_size)
+
+        # Log parsed dates and sizes
+        logging.info(f"Parsed file dates: {self.file_dates}")
+        logging.info(f"Parsed file sizes: {self.file_sizes}")
 
         # Verify file names were parsed correctly
         if len(self.file_names) != self.file_count:
@@ -490,9 +543,19 @@ class AFSUtility:
             name = self.file_names[idx]
             formatted_size = self.format_size(size)
             description = self.descriptions.get(name, "")
+            # In parse_afs Treeview insertion loop
             self.tree.insert(
-                "", "end", values=(name, f"0x{pointer:X}", formatted_size, description)
+                "",
+                "end",
+                values=(
+                    name,
+                    f"0x{pointer:X}",
+                    formatted_size,
+                    self.file_dates[idx],
+                    description,
+                ),
             )
+
             # After populating the tree with data, store the initial data for search reference
             self.original_data = [
                 (self.tree.item(item, "values")) for item in self.tree.get_children()
