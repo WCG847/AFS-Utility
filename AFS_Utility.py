@@ -435,7 +435,7 @@ class AFSUtility:
         last_entry_pointer, last_entry_size = self.toc_entries[-1]
         expected_footer_start = last_entry_pointer + last_entry_size
 
-        # Align to nearest 0x800 boundary if necessary
+        # Align to nearest 0x800 (2048) boundary if necessary
         if expected_footer_start % 0x800 != 0:
             aligned_footer_start = (expected_footer_start + 0x800) & ~0x7FF
             logging.info(
