@@ -203,6 +203,72 @@ def run_as_admin():
         logging.info("Already running with admin privileges.")
 
 
+def register_file_association():
+    """Register .afs file association on Windows with admin privilege check and confirmation messages."""
+    if sys.platform != "win32":
+        logging.warning("File association is only supported on Windows.")
+        return
+
+    # Check for admin privileges
+    if not ctypes.windll.shell32.IsUserAnAdmin():
+        # Show message and attempt to relaunch with admin privileges
+        response = messagebox.askyesno(
+            "Admin Privileges Required",
+            "Admin privileges are required to register file associations.\n"
+            "Would you like to restart this program as an administrator?",
+        )
+        if response:
+            # Relaunch with admin privileges
+            ctypes.windll.shell32.ShellExecuteW(
+                None, "runas", sys.executable, " ".join(sys.argv), None, 1
+            )
+            sys.exit(0)  # Exit the current instance
+        else:
+            # If user declines admin escalation, exit the function
+            messagebox.showinfo(
+                "File Association",
+                "File association requires admin privileges. Please try again as an administrator.",
+            )
+            return
+
+    # Admin privileges confirmed, proceed with file association registration
+    executable_path = os.path.abspath(sys.executable)
+    logging.info(f"Executable Path: {executable_path}")
+
+    # Define registry paths and values
+    reg_paths = [
+        (r"Software\Classes\.afs", "", "AFSUtility.File"),
+        (r"Software\Classes\AFSUtility.File", "", "AFS Utility File"),
+        (r"Software\Classes\AFSUtility.File\DefaultIcon", "", f"{executable_path},0"),
+        (
+            r"Software\Classes\AFSUtility.File\shell\open\command",
+            "",
+            f'"{executable_path}" "%1"',
+        ),
+    ]
+
+    try:
+        # Set registry keys for file association
+        for path, name, value in reg_paths:
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, path) as key:
+                winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+                logging.info(f"Set registry value: {path} -> {value}")
+
+        # Success message after successful registration
+        messagebox.showinfo(
+            "File Association",
+            "File association for .afs files has been successfully registered.",
+        )
+        logging.info("File association registered successfully.")
+
+    except Exception as e:
+        logging.error(f"Failed to register file association: {e}")
+        messagebox.showerror(
+            "File Association Error",
+            "Unable to complete file association setup. Please check permissions or try again.",
+        )
+
+
 class AFSUtility:
     def __init__(self, root):
         self.root = root
@@ -324,74 +390,6 @@ class AFSUtility:
     def run_in_thread(self, target, *args):
         thread = threading.Thread(target=target, args=args)
         thread.start()
-
-    def register_file_association():
-        """Register .afs file association on Windows."""
-        if sys.platform != "win32":
-            logging.warning("File association is only supported on Windows.")
-            return
-
-        # Check if the program is running with admin privileges
-        try:
-            if not ctypes.windll.shell32.IsUserAnAdmin():
-                raise PermissionError(
-                    "Admin privileges required to modify file associations."
-                )
-
-            # Get the path to the executable
-            executable_path = os.path.abspath(sys.executable)
-            logging.info(f"Executable Path: {executable_path}")
-
-            # Define registry paths and values
-            reg_paths = [
-                (r"Software\Classes\.afs", "", "AFSUtility.File"),
-                (r"Software\Classes\AFSUtility.File", "", "AFS Utility File"),
-                (
-                    r"Software\Classes\AFSUtility.File\DefaultIcon",
-                    "",
-                    f"{executable_path},0",
-                ),
-                (
-                    r"Software\Classes\AFSUtility.File\shell\open\command",
-                    "",
-                    f'"{executable_path}" "%1"',
-                ),
-            ]
-
-            # Set registry keys for file association
-            for path, name, value in reg_paths:
-                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, path) as key:
-                    winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
-                    logging.info(f"Set registry value: {path} -> {value}")
-
-            logging.info("File association registered successfully.")
-
-        except PermissionError:
-            # Prompt to restart as admin
-            response = messagebox.askyesno(
-                "Admin Privileges Required",
-                "Admin privileges are required to register file associations.\n"
-                "Would you like to restart this program as an administrator?",
-            )
-            if response:
-                ctypes.windll.shell32.ShellExecuteW(
-                    None, "runas", sys.executable, " ".join(sys.argv), None, 1
-                )
-        except PermissionError:
-            logging.warning(
-                "Permission denied. File association requires admin privileges."
-            )
-            messagebox.showwarning(
-                "File Association",
-                "Admin privileges required to register file associations.",
-            )
-        except Exception as e:
-            logging.error(f"Failed to register file association: {e}")
-            messagebox.showerror(
-                "File Association Error", "Unable to complete file association setup."
-            )
-        else:
-            logging.info("File association registered successfully.")
 
     def create_new_afs_archive(self):
         # Start the archive creation in a separate thread
@@ -811,7 +809,7 @@ class AFSUtility:
         column = self.tree.identify_column(event.x)
 
         # Check if double-click is on the "comments" column (fourth column)
-        if column == "#4" and item_id:
+        if column == "#5" and item_id:
             current_comment = self.tree.item(item_id, "values")[3]
             new_comment = simpledialog.askstring(
                 "Edit Comment", "Enter your comment:", initialvalue=current_comment
