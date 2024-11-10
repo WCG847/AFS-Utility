@@ -401,13 +401,37 @@ class AFSUtility:
         self.run_in_thread(self._create_new_afs_archive)
 
     def _create_new_afs_archive(self):
-        """Creates a new AFS archive, including file metadata and footer in TOC without affecting file count."""
+        """Creates a new AFS archive, ensuring only files with valid magic headers are included."""
         folder_path = filedialog.askdirectory(
             title="Select Folder with Files for New AFS Archive"
         )
         if not folder_path:
             return
 
+        # Allowed magic headers for CRI Middleware compliance
+        allowed_headers = {b"\x80\x00", b"\x00\x00"}
+        invalid_files = []
+
+        # Check each file in the folder for a valid magic header
+        for file_name in os.listdir(folder_path):
+            file_path = os.path.join(folder_path, file_name)
+            if os.path.isfile(file_path):
+                with open(file_path, "rb") as file:
+                    header = file.read(2)
+                    if header not in allowed_headers:
+                        invalid_files.append(file_name)
+
+        # If there are any invalid files, show an error and exit
+        if invalid_files:
+            invalid_file_list = "\n".join(invalid_files)
+            messagebox.showerror(
+                "Invalid Files Found",
+                f"The following files do not have valid ADX or SFD magic headers:\n{invalid_file_list}\n\n"
+                "Only files with headers matching ADX (0x80 0x00) or SFD (0x00 0x00) are allowed.",
+            )
+            return
+
+        # Proceed with AFS creation if all files have valid headers
         output_file = filedialog.asksaveasfilename(
             title="Save New AFS Archive As",
             defaultextension=".afs",
@@ -421,21 +445,13 @@ class AFSUtility:
             for f in os.listdir(folder_path)
             if os.path.isfile(os.path.join(folder_path, f))
         ]
-        if not files:
-            self.root.after(
-                0,
-                lambda: messagebox.showwarning(
-                    "No Files Found", "The selected folder does not contain any files."
-                ),
-            )
-            return
 
+        # Rest of the method remains the same, proceeding to gather file data and metadata
         toc_entries = []
         file_names = []
         file_data = []
         pointer = 0x800  # Start data section after 0x800 offset for the header
 
-        # Collect file data and metadata
         for file_name in files:
             file_path = os.path.join(folder_path, file_name)
             with open(file_path, "rb") as f:
