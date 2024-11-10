@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import psutil
+import re
 import shlex
 import shutil
 import struct
@@ -25,8 +26,10 @@ import winreg
 
 from functools import partial
 from decimal import Decimal
+from PIL import Image, ImageTk
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import Label
 from tkinter import font as tkfont
 
 # Configure logging
@@ -308,7 +311,11 @@ class AFSUtility:
             label="Upload Description.json", command=self.upload_description_json
         )
 
-        # Update context menu for sound playing and conversion
+        # Initialize GUI elements for waveform display
+        self.waveform_label = Label(root)
+        self.waveform_label.pack()
+        
+        # Update context menu with play and convert options
         self.context_menu.add_command(label="Play Sound", command=self.play_selected_file)
         self.context_menu.add_command(label="Convert to WAV", command=self.convert_selected_file)
         
@@ -422,6 +429,55 @@ class AFSUtility:
         
         return temp_file_path
 
+    def get_audio_duration(self, file_path):
+        """Extract the duration of an audio file using ffprobe."""
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                startupinfo=self.get_hidden_startupinfo()
+            )
+            duration = float(result.stdout.strip())
+            return duration
+        except Exception as e:
+            logging.error(f"Error getting audio duration: {e}")
+            return None
+
+    def get_hidden_startupinfo(self):
+        """Returns startup info to hide console window on Windows."""
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        return startupinfo
+
+    def generate_waveform(self, file_path):
+        """Generates a waveform image using ffmpeg and returns the image path."""
+        temp_dir = tempfile.mkdtemp()
+        waveform_path = os.path.join(temp_dir, "waveform.png")
+        
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", file_path, "-filter_complex", "aformat=channel_layouts=mono,showwavespic=s=600x120", "-frames:v", "1", waveform_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                startupinfo=self.get_hidden_startupinfo()
+            )
+            return waveform_path
+        except Exception as e:
+            logging.error(f"Error generating waveform: {e}")
+            return None
+
+    def display_waveform(self, waveform_path):
+        """Display the waveform image in the GUI."""
+        try:
+            waveform_image = Image.open(waveform_path)
+            waveform_photo = ImageTk.PhotoImage(waveform_image)
+            self.waveform_label.config(image=waveform_photo)
+            self.waveform_label.image = waveform_photo
+        except Exception as e:
+            logging.error(f"Error displaying waveform: {e}")
+
     def play_selected_file(self):
         selected_item = self.tree.selection()
         if not selected_item:
@@ -435,12 +491,24 @@ class AFSUtility:
         if temp_file_path is None:
             return
 
-        # Use ffplay to play the audio file
-        try:
-            subprocess.run(["ffplay", "-autoexit", temp_file_path])
-        finally:
-            # Cleanup the temporary file
+        # Get audio duration and generate waveform for the GUI
+        duration = self.get_audio_duration(temp_file_path)
+        waveform_path = self.generate_waveform(temp_file_path)
+        if waveform_path:
+            self.display_waveform(waveform_path)
+
+        # Run ffplay in a background thread to play the audio silently
+        def play_audio():
+            subprocess.run(
+                ["ffplay", "-nodisp", "-autoexit", temp_file_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                startupinfo=self.get_hidden_startupinfo()
+            )
+            # Cleanup the temporary file after playback
             shutil.rmtree(os.path.dirname(temp_file_path), ignore_errors=True)
+
+        threading.Thread(target=play_audio, daemon=True).start()
 
     def convert_selected_file(self):
         selected_item = self.tree.selection()
@@ -458,18 +526,22 @@ class AFSUtility:
         # Prompt user for save location and file name
         save_path = filedialog.asksaveasfilename(defaultextension=".wav", filetypes=[("WAV files", "*.wav")])
         if not save_path:
-            # User canceled the save dialog
             shutil.rmtree(os.path.dirname(temp_file_path), ignore_errors=True)
             return
 
-        # Use ffmpeg to convert the file to WAV
+        # Run ffmpeg to convert the file to WAV in background
         try:
-            subprocess.run(["ffmpeg", "-i", temp_file_path, save_path], check=True)
+            subprocess.run(
+                ["ffmpeg", "-i", temp_file_path, save_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                startupinfo=self.get_hidden_startupinfo(),
+                check=True
+            )
             messagebox.showinfo("Conversion Complete", f"File converted successfully to {save_path}")
         except subprocess.CalledProcessError as e:
             messagebox.showerror("Conversion Error", f"Failed to convert file: {e}")
         finally:
-            # Cleanup the temporary file
             shutil.rmtree(os.path.dirname(temp_file_path), ignore_errors=True)
 
     def create_new_afs_archive(self):
