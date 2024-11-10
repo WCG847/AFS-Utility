@@ -26,9 +26,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter import font as tkfont
 
 # Configure logging
-log_dir = os.path.join(
-    os.getenv("LOCALAPPDATA"), "wcg847", "AFS Utility", "logs"
-)
+log_dir = os.path.join(os.getenv("LOCALAPPDATA"), "wcg847", "AFS Utility", "logs")
 try:
     os.makedirs(log_dir, exist_ok=True)
 except Exception as e:
@@ -324,7 +322,9 @@ class AFSUtility:
         self.menu.add_cascade(label="Tools", menu=tools_menu)
         tools_menu.add_command(label="Add", command=self.add_file)
         tools_menu.add_command(label="Mass Extract", command=self.mass_extract)
-        tools_menu.add_command(label="Register File Association", command=register_file_association)
+        tools_menu.add_command(
+            label="Register File Association", command=register_file_association
+        )
 
         help_menu = tk.Menu(self.menu, tearoff=0)
         self.menu.add_cascade(label="Help", menu=help_menu)
@@ -332,14 +332,16 @@ class AFSUtility:
             label="About AFS Utility",
             command=lambda: self.about_display(
                 "About AFS Utility",
-                "Welcome to the AFS Utility, a powerful and user-friendly tool designed for managing AFS (Archive File System) files."
-            ))
+                "Welcome to the AFS Utility, a powerful and user-friendly tool designed for managing AFS (Archive File System) files.",
+            ),
+        )
         help_menu.add_command(
             label="About WCG847",
             command=lambda: self.about_display(
                 "About WCG847",
-                "WCG847 is a reverse engineer, and modder. He specialises in WWE games and has taken an interest since 2016."
-            ))
+                "WCG847 is a reverse engineer, and modder. He specialises in WWE games and has taken an interest since 2016.",
+            ),
+        )
 
         # Start monitoring application health in a separate thread
         monitoring_thread = threading.Thread(target=self.watchdog, daemon=True)
@@ -377,10 +379,10 @@ class AFSUtility:
             if not self.is_healthy():
                 logging.warning("Application health check failed. Attempting recovery.")
                 self.attempt_recovery()
-    
+
     def is_healthy(self):
         return self.afs_path is not None and self.tree.get_children()
-    
+
     def attempt_recovery(self):
         try:
             if self.afs_path:
@@ -389,7 +391,6 @@ class AFSUtility:
                 messagebox.showinfo("Recovery", "Application recovered successfully.")
         except Exception as e:
             handle_critical_error(e)
-
 
     def run_in_thread(self, target, *args):
         thread = threading.Thread(target=target, args=args)
@@ -590,7 +591,7 @@ class AFSUtility:
             afs_path = filedialog.askopenfilename(
                 title="Select File", filetypes=[("Sofdec Archive File System", "*.afs")]
             )
-        
+
         if afs_path:
             self.afs_path = afs_path  # Store the AFS path for later usage
             try:
@@ -1009,6 +1010,7 @@ class AFSUtility:
         text_widget.insert(tk.END, description)
         text_widget.config(state=tk.DISABLED)
         text_widget.pack(expand=True, fill=tk.BOTH, padx=20, pady=20)
+
 
 if __name__ == "__main__":
     root = tk.Tk()
