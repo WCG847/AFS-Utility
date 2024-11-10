@@ -23,6 +23,26 @@ from functools import partial
 from decimal import Decimal
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import font as tkfont
+
+# Configure logging
+log_dir = os.path.join(
+    os.getenv("LOCALAPPDATA"), "wcg847", "AFS Utility", "logs"
+)
+try:
+    os.makedirs(log_dir, exist_ok=True)
+except Exception as e:
+    logging.error(f"Error creating log directory: {e}")
+    exit(1)
+
+log_file = os.path.join(log_dir, "log.txt")
+logging.basicConfig(
+    filename=log_file,
+    level=logging.DEBUG,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+
+logging.info("Application started.")
 
 # Define Windows priority classes
 PRIORITY_CLASSES = {
@@ -47,40 +67,6 @@ def set_process_priority(priority_class):
         logging.info(f"Process priority set to {priority_class}")
     except Exception as e:
         logging.error(f"Failed to set process priority: {e}")
-
-
-def monitor_and_adjust_priority():
-    """Monitor CPU usage and adjust process priority based on workload."""
-    p = psutil.Process()  # Current process
-    try:
-        while True:
-            # Get current CPU usage
-            cpu_usage = p.cpu_percent(interval=1)
-
-            # Adjust priority based on CPU usage
-            if cpu_usage < 10:
-                set_process_priority("IDLE")
-            elif 10 <= cpu_usage < 30:
-                set_process_priority("BELOW_NORMAL")
-            elif 30 <= cpu_usage < 60:
-                set_process_priority("NORMAL")
-            elif 60 <= cpu_usage < 80:
-                set_process_priority("ABOVE_NORMAL")
-            else:
-                set_process_priority("HIGH")
-
-            logging.info(f"CPU usage: {cpu_usage}% - Priority adjusted.")
-            time.sleep(5)  # Check every 5 seconds
-
-    except psutil.NoSuchProcess:
-        logging.error("Process not found.")
-    except Exception as e:
-        logging.error(f"Error during priority adjustment: {e}")
-
-
-# Start monitoring in a separate thread so it doesn't block the main application
-monitoring_thread = threading.Thread(target=monitor_and_adjust_priority, daemon=True)
-monitoring_thread.start()
 
 
 def write_minidump(exception_type, exception_value, tb):
@@ -152,36 +138,6 @@ def handle_critical_error(error):
         restart_application()
     else:
         sys.exit(1)
-
-
-def watchdog(self):
-    """Watchdog thread to monitor application health and attempt recovery if needed."""
-    while True:
-        time.sleep(10)  # Check every 10 seconds
-        if not self.is_healthy():
-            logging.warning("Application health check failed. Attempting recovery.")
-            self.attempt_recovery()
-
-
-def is_healthy(self):
-    """Check application health by verifying core components are responsive."""
-    # Add checks here, by ensuring key objects are not None or verifying thread responsiveness
-    return self.afs_path is not None and self.tree.get_children()  # Simplified example
-
-
-def attempt_recovery(self):
-    """Attempt to recover the application by reloading resources or restarting components."""
-    try:
-        if self.afs_path:
-            with open(self.afs_path, "rb") as afs_file:
-                self.parse_afs(afs_file)  # Re-parse to attempt recovery
-            messagebox.showinfo("Recovery", "Application recovered successfully.")
-    except Exception as e:
-        logging.error(f"Recovery attempt failed: {e}")
-        messagebox.showerror(
-            "Recovery Failed",
-            "Automatic recovery was unsuccessful. Please restart the application.",
-        )
 
 
 def run_as_admin():
@@ -274,32 +230,16 @@ class AFSUtility:
         self.root = root
         self.root.title("AFS Utility")
 
-        # Setup exception handler for uncaught exceptions
+        # Ensure the application runs with admin privileges
+        run_as_admin()
+
+        # Set up exception handler for uncaught exceptions
         install_exception_handler()
 
-        # Configure logging
-        log_dir = os.path.join(
-            os.getenv("LOCALAPPDATA"), "wcg847", "AFS Utility", "logs"
-        )
-        try:
-            os.makedirs(log_dir, exist_ok=True)
-        except Exception as e:
-            logging.error(f"Error creating log directory: {e}")
-            exit(1)
-
-        log_file = os.path.join(log_dir, "log.txt")
-        logging.basicConfig(
-            filename=log_file,
-            level=logging.DEBUG,
-            format="%(asctime)s - %(levelname)s - %(message)s",
-        )
-
-        logging.info("Application started.")
-
-        # Setup search bar at the top
+        # Set up search bar at the top
         self.setup_search_bar()
 
-        # Initialise AFS data storage
+        # Initialize AFS data storage
         self.toc_entries = []
         self.file_names = []
         self.descriptions = {}
@@ -369,7 +309,7 @@ class AFSUtility:
         # Binding right-click key
         self.tree.bind("<Button-3>", self.show_context_menu)
 
-        # Menu for file and tools options
+        # Menu for file, tools, and help options
         self.menu = tk.Menu(root)
         root.config(menu=self.menu)
 
@@ -383,9 +323,73 @@ class AFSUtility:
         tools_menu = tk.Menu(self.menu, tearoff=0)
         self.menu.add_cascade(label="Tools", menu=tools_menu)
         tools_menu.add_command(label="Add", command=self.add_file)
-        tools_menu.add_command(
-            label="Mass Extract", command=self.mass_extract
-        )  # Added mass extract option
+        tools_menu.add_command(label="Mass Extract", command=self.mass_extract)
+        tools_menu.add_command(label="Register File Association", command=register_file_association)
+
+        help_menu = tk.Menu(self.menu, tearoff=0)
+        self.menu.add_cascade(label="Help", menu=help_menu)
+        help_menu.add_command(
+            label="About AFS Utility",
+            command=lambda: self.about_display(
+                "About AFS Utility",
+                "Welcome to the AFS Utility, a powerful and user-friendly tool designed for managing AFS (Archive File System) files."
+            ))
+        help_menu.add_command(
+            label="About WCG847",
+            command=lambda: self.about_display(
+                "About WCG847",
+                "WCG847 is a reverse engineer, and modder. He specialises in WWE games and has taken an interest since 2016."
+            ))
+
+        # Start monitoring application health in a separate thread
+        monitoring_thread = threading.Thread(target=self.watchdog, daemon=True)
+        monitoring_thread.start()
+
+        # Check if a file path is provided as a command-line argument and load it
+        if len(sys.argv) > 1 and sys.argv[1].endswith(".afs"):
+            self.load_afs_file(sys.argv[1])
+
+    # Add calls to handle_critical_error in relevant try-except blocks
+    def monitor_and_adjust_priority(self):
+        try:
+            p = psutil.Process()
+            while True:
+                cpu_usage = p.cpu_percent(interval=1)
+                if cpu_usage < 10:
+                    set_process_priority("IDLE")
+                elif 10 <= cpu_usage < 30:
+                    set_process_priority("BELOW_NORMAL")
+                elif 30 <= cpu_usage < 60:
+                    set_process_priority("NORMAL")
+                elif 60 <= cpu_usage < 80:
+                    set_process_priority("ABOVE_NORMAL")
+                else:
+                    set_process_priority("HIGH")
+                logging.info(f"CPU usage: {cpu_usage}% - Priority adjusted.")
+                time.sleep(5)
+        except Exception as e:
+            handle_critical_error(e)
+
+    # Integrate the existing watchdog, is_healthy, and attempt_recovery methods as needed
+    def watchdog(self):
+        while True:
+            time.sleep(10)
+            if not self.is_healthy():
+                logging.warning("Application health check failed. Attempting recovery.")
+                self.attempt_recovery()
+    
+    def is_healthy(self):
+        return self.afs_path is not None and self.tree.get_children()
+    
+    def attempt_recovery(self):
+        try:
+            if self.afs_path:
+                with open(self.afs_path, "rb") as afs_file:
+                    self.parse_afs(afs_file)
+                messagebox.showinfo("Recovery", "Application recovered successfully.")
+        except Exception as e:
+            handle_critical_error(e)
+
 
     def run_in_thread(self, target, *args):
         thread = threading.Thread(target=target, args=args)
@@ -580,11 +584,13 @@ class AFSUtility:
 
         self.run_in_thread(extract_files)
 
-    def load_afs_file(self):
+    def load_afs_file(self, afs_path=None):
         """Load an AFS file with graceful degradation on error."""
-        afs_path = filedialog.askopenfilename(
-            title="Select File", filetypes=[("Sofdec Archive File System", "*.afs")]
-        )
+        if not afs_path:
+            afs_path = filedialog.askopenfilename(
+                title="Select File", filetypes=[("Sofdec Archive File System", "*.afs")]
+            )
+        
         if afs_path:
             self.afs_path = afs_path  # Store the AFS path for later usage
             try:
@@ -984,6 +990,25 @@ class AFSUtility:
             for item in self.original_data:
                 self.tree.insert("", tk.END, values=item)
 
+    def about_display(self, title, description):
+        about_window = tk.Toplevel()
+        about_window.title(title)
+        # Grab width and height
+        screen_width = root.winfo_screenwidth()
+        screen_height = root.winfo_screenheight()
+
+        # Set window size to 80% of screen size
+        window_width = int(screen_width * 0.8)
+        window_height = int(screen_height * 0.8)
+
+        about_window.geometry(f"{window_width}x{window_height}")
+
+        bold_font = tkfont.Font(family="Helvetica", size=12, weight="bold")
+
+        text_widget = tk.Text(about_window, font=bold_font, wrap=tk.WORD)
+        text_widget.insert(tk.END, description)
+        text_widget.config(state=tk.DISABLED)
+        text_widget.pack(expand=True, fill=tk.BOTH, padx=20, pady=20)
 
 if __name__ == "__main__":
     root = tk.Tk()
