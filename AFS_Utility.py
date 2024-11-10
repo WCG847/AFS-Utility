@@ -26,7 +26,7 @@ import winreg
 
 from functools import partial
 from decimal import Decimal
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter import Label
@@ -311,16 +311,27 @@ class AFSUtility:
             label="Upload Description.json", command=self.upload_description_json
         )
 
-        # Initialize GUI elements for waveform display
+        self.current_playback_process = None  # Track the current playback process
+        self.is_playing = False  # Track playback state
+
+        # Initialise GUI elements for waveform display and progress bar
         self.waveform_label = Label(root)
         self.waveform_label.pack()
-        
-        # Update context menu with play and convert options
-        self.context_menu.add_command(label="Play Sound", command=self.play_selected_file)
-        self.context_menu.add_command(label="Convert to WAV", command=self.convert_selected_file)
-        
+
+        # Label to display numerical progress
+        self.duration_label = Label(root, text="00:00 / 00:00")
+        self.duration_label.pack()
+
+        self.context_menu.add_command(label="Play", command=self.play_selected_file)
+        self.context_menu.add_command(
+            label="Convert", command=self.convert_selected_file
+        )
+
         # Bind Ctrl+P to play sound
         root.bind("<Control-p>", lambda event: self.play_selected_file())
+
+        # Bind application exit to cleanup function
+        root.protocol("WM_DELETE_WINDOW", self.on_exit)
 
         # Binding right-click key
         self.tree.bind("<Button-3>", self.show_context_menu)
@@ -414,69 +425,38 @@ class AFSUtility:
         thread = threading.Thread(target=target, args=args)
         thread.start()
 
-    def extract_file_to_temp(self, pointer, size):
-        """Extracts the selected file to a temporary directory and returns the path."""
-        temp_dir = os.path.join(tempfile.gettempdir(), str(uuid.uuid4()))
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        file_data = self.read_from_afs_file(pointer, size)
-        if file_data is None:
-            return None
-        
-        temp_file_path = os.path.join(temp_dir, "audiofile.adx")
+    def on_exit(self):
+        """Ensure playback stops on exit."""
+        self.stop_playback()
+        self.root.quit()
+
+    def stop_playback(self):
+        """Stop the current playback process if running."""
+        if (
+            self.current_playback_process
+            and self.current_playback_process.poll() is None
+        ):
+            self.current_playback_process.terminate()
+            logging.info("Stopped playback process")
+            self.current_playback_process = None
+            self.is_playing = False
+
+    def extract_file_to_temp(self, file_name, file_data):
+        """Extracts a file to a temp directory with its original extension."""
+        temp_dir = tempfile.mkdtemp()
+        _, ext = os.path.splitext(file_name)
+        temp_file_path = os.path.join(temp_dir, f"audiofile{ext}")
+
         with open(temp_file_path, "wb") as temp_file:
             temp_file.write(file_data)
-        
-        return temp_file_path
 
-    def get_audio_duration(self, file_path):
-        """Extract the duration of an audio file using ffprobe."""
-        try:
-            result = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                startupinfo=self.get_hidden_startupinfo()
-            )
-            duration = float(result.stdout.strip())
-            return duration
-        except Exception as e:
-            logging.error(f"Error getting audio duration: {e}")
-            return None
+        return temp_file_path
 
     def get_hidden_startupinfo(self):
         """Returns startup info to hide console window on Windows."""
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         return startupinfo
-
-    def generate_waveform(self, file_path):
-        """Generates a waveform image using ffmpeg and returns the image path."""
-        temp_dir = tempfile.mkdtemp()
-        waveform_path = os.path.join(temp_dir, "waveform.png")
-        
-        try:
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", file_path, "-filter_complex", "aformat=channel_layouts=mono,showwavespic=s=600x120", "-frames:v", "1", waveform_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                startupinfo=self.get_hidden_startupinfo()
-            )
-            return waveform_path
-        except Exception as e:
-            logging.error(f"Error generating waveform: {e}")
-            return None
-
-    def display_waveform(self, waveform_path):
-        """Display the waveform image in the GUI."""
-        try:
-            waveform_image = Image.open(waveform_path)
-            waveform_photo = ImageTk.PhotoImage(waveform_image)
-            self.waveform_label.config(image=waveform_photo)
-            self.waveform_label.image = waveform_photo
-        except Exception as e:
-            logging.error(f"Error displaying waveform: {e}")
 
     def play_selected_file(self):
         selected_item = self.tree.selection()
@@ -485,61 +465,157 @@ class AFSUtility:
             return
         file_index = self.tree.index(selected_item[0])
         pointer, size = self.toc_entries[file_index]
+        file_name = self.file_names[file_index]
 
-        # Extract file to temporary directory
-        temp_file_path = self.extract_file_to_temp(pointer, size)
+        # Stop any existing playback before starting a new one
+        self.stop_playback()
+
+        # Extract file to temporary directory with correct extension
+        file_data = self.read_from_afs_file(pointer, size)
+        temp_file_path = self.extract_file_to_temp(file_name, file_data)
         if temp_file_path is None:
             return
 
-        # Get audio duration and generate waveform for the GUI
-        duration = self.get_audio_duration(temp_file_path)
-        waveform_path = self.generate_waveform(temp_file_path)
-        if waveform_path:
-            self.display_waveform(waveform_path)
+        # Determine whether to play as video (SFD) or audio (ADX)
+        if self.is_sfd_file(temp_file_path):
+            self.play_video(temp_file_path)
+        else:
+            self.play_audio(temp_file_path)
 
-        # Run ffplay in a background thread to play the audio silently
-        def play_audio():
-            subprocess.run(
-                ["ffplay", "-nodisp", "-autoexit", temp_file_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                startupinfo=self.get_hidden_startupinfo()
-            )
-            # Cleanup the temporary file after playback
-            shutil.rmtree(os.path.dirname(temp_file_path), ignore_errors=True)
+    def is_sfd_file(self, file_path):
+        """Determine if a file is an SFD video file based on the extension."""
+        return file_path.lower().endswith(".sfd")
 
-        threading.Thread(target=play_audio, daemon=True).start()
+    def play_audio(self, file_path):
+        """Play an audio file with ffplay, ensuring non-blocking playback."""
+        command = ["ffplay", "-nodisp", "-autoexit", file_path]
+        logging.info(f"Running audio command: {' '.join(command)}")
+
+        def audio_playback():
+            try:
+                self.is_playing = True
+                self.current_playback_process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,  # Avoid blocking on stderr
+                    startupinfo=self.get_hidden_startupinfo(),
+                )
+                self.current_playback_process.wait()
+            except Exception as e:
+                logging.error(f"Error during audio playback: {e}")
+            finally:
+                self.is_playing = False
+                shutil.rmtree(os.path.dirname(file_path), ignore_errors=True)
+                logging.info("Audio playback finished and temp files cleaned up")
+
+        # Start playback in a separate thread
+        threading.Thread(target=audio_playback, daemon=True).start()
+
+    def play_video(self, file_path):
+        """Play a video file using ffplay with a scaled window size based on the user's screen dimensions."""
+
+        # Fetch screen dimensions using tkinter
+        root = tk.Tk()
+        screen_width = root.winfo_screenwidth()
+        screen_height = root.winfo_screenheight()
+        root.destroy()
+
+        # Calculate 80% of the screen dimensions
+        window_width = int(screen_width * 0.8)
+        window_height = int(screen_height * 0.8)
+
+        # ffplay command with specified window size
+        command = [
+            "ffplay",
+            file_path,
+            "-x",
+            str(window_width),
+            "-y",
+            str(window_height),
+        ]
+        logging.info(
+            f"Running video command with custom window size: {' '.join(command)}"
+        )
+
+        def video_playback():
+            try:
+                # Launch ffplay with only stdout and stderr suppressed to keep the video GUI visible
+                self.current_playback_process = subprocess.Popen(
+                    command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                self.current_playback_process.wait()
+            except Exception as e:
+                logging.error(f"Error during video playback: {e}")
+            finally:
+                # Clean up the temporary video file
+                shutil.rmtree(os.path.dirname(file_path), ignore_errors=True)
+                logging.info("Video playback finished and temp files cleaned up")
+
+        # Start playback in a separate thread to prevent blocking the main thread
+        threading.Thread(target=video_playback, daemon=True).start()
 
     def convert_selected_file(self):
+        """Convert selected file based on its type (ADX to WAV, SFD to MP4)."""
         selected_item = self.tree.selection()
         if not selected_item:
             messagebox.showwarning("Warning", "No file selected.")
             return
         file_index = self.tree.index(selected_item[0])
         pointer, size = self.toc_entries[file_index]
+        file_name = self.file_names[file_index]
 
-        # Extract file to temporary directory
-        temp_file_path = self.extract_file_to_temp(pointer, size)
+        # Extract file to temporary directory with correct extension
+        file_data = self.read_from_afs_file(pointer, size)
+        temp_file_path = self.extract_file_to_temp(file_name, file_data)
         if temp_file_path is None:
             return
 
-        # Prompt user for save location and file name
-        save_path = filedialog.asksaveasfilename(defaultextension=".wav", filetypes=[("WAV files", "*.wav")])
+        # Determine conversion parameters based on file type
+        if self.is_sfd_file(temp_file_path):
+            save_ext = ".mp4"
+            conversion_args = [
+                "ffmpeg",
+                "-i",
+                temp_file_path,
+                "-c:v",
+                "libx264",
+                "-preset",
+                "slow",
+                "-crf",
+                "18",
+            ]
+        else:
+            save_ext = ".wav"
+            conversion_args = ["ffmpeg", "-i", temp_file_path]
+
+        # Prompt user for save location with appropriate extension
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=save_ext,
+            filetypes=[(f"{save_ext.upper()} files", f"*{save_ext}")],
+        )
         if not save_path:
             shutil.rmtree(os.path.dirname(temp_file_path), ignore_errors=True)
             return
 
-        # Run ffmpeg to convert the file to WAV in background
+        # Execute conversion and handle errors
+        conversion_args.append(save_path)
+        logging.info(f"Running conversion command: {' '.join(conversion_args)}")
         try:
-            subprocess.run(
-                ["ffmpeg", "-i", temp_file_path, save_path],
+            result = subprocess.run(
+                conversion_args,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 startupinfo=self.get_hidden_startupinfo(),
-                check=True
+                check=True,
             )
-            messagebox.showinfo("Conversion Complete", f"File converted successfully to {save_path}")
+            logging.debug(f"ffmpeg output: {result.stdout.decode().strip()}")
+            if result.stderr:
+                logging.error(f"ffmpeg error: {result.stderr.decode().strip()}")
+            messagebox.showinfo(
+                "Conversion Complete", f"File converted successfully to {save_path}"
+            )
         except subprocess.CalledProcessError as e:
+            logging.error(f"Conversion error: {e}")
             messagebox.showerror("Conversion Error", f"Failed to convert file: {e}")
         finally:
             shutil.rmtree(os.path.dirname(temp_file_path), ignore_errors=True)
