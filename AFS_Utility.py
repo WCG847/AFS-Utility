@@ -3,9 +3,12 @@ import datetime
 import json
 import logging
 import os
+import psutil
 import struct
+import subprocess
 import sys
 import threading
+import time
 import traceback
 
 import pywintypes
@@ -19,6 +22,64 @@ from functools import partial
 from decimal import Decimal
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
+
+# Define Windows priority classes
+PRIORITY_CLASSES = {
+    "IDLE": win32process.IDLE_PRIORITY_CLASS,
+    "BELOW_NORMAL": win32process.BELOW_NORMAL_PRIORITY_CLASS,
+    "NORMAL": win32process.NORMAL_PRIORITY_CLASS,
+    "ABOVE_NORMAL": win32process.ABOVE_NORMAL_PRIORITY_CLASS,
+    "HIGH": win32process.HIGH_PRIORITY_CLASS,
+    "REALTIME": win32process.REALTIME_PRIORITY_CLASS,
+}
+
+
+def set_process_priority(priority_class):
+    """Set the current process's priority."""
+    try:
+        p = psutil.Process()
+        handle = ctypes.windll.kernel32.OpenProcess(
+            win32con.PROCESS_ALL_ACCESS, False, p.pid
+        )
+        win32process.SetPriorityClass(handle, PRIORITY_CLASSES[priority_class])
+        ctypes.windll.kernel32.CloseHandle(handle)
+        logging.info(f"Process priority set to {priority_class}")
+    except Exception as e:
+        logging.error(f"Failed to set process priority: {e}")
+
+
+def monitor_and_adjust_priority():
+    """Monitor CPU usage and adjust process priority based on workload."""
+    p = psutil.Process()  # Current process
+    try:
+        while True:
+            # Get current CPU usage
+            cpu_usage = p.cpu_percent(interval=1)
+
+            # Adjust priority based on CPU usage
+            if cpu_usage < 10:
+                set_process_priority("IDLE")
+            elif 10 <= cpu_usage < 30:
+                set_process_priority("BELOW_NORMAL")
+            elif 30 <= cpu_usage < 60:
+                set_process_priority("NORMAL")
+            elif 60 <= cpu_usage < 80:
+                set_process_priority("ABOVE_NORMAL")
+            else:
+                set_process_priority("HIGH")
+
+            logging.info(f"CPU usage: {cpu_usage}% - Priority adjusted.")
+            time.sleep(5)  # Check every 5 seconds
+
+    except psutil.NoSuchProcess:
+        logging.error("Process not found.")
+    except Exception as e:
+        logging.error(f"Error during priority adjustment: {e}")
+
+
+# Start monitoring in a separate thread so it doesn't block the main application
+monitoring_thread = threading.Thread(target=monitor_and_adjust_priority, daemon=True)
+monitoring_thread.start()
 
 
 def write_minidump(exception_type, exception_value, tb):
@@ -62,6 +123,81 @@ def write_minidump(exception_type, exception_value, tb):
 def install_exception_handler():
     """Set up custom exception handler to catch unhandled exceptions."""
     sys.excepthook = write_minidump
+
+
+def restart_application():
+    """Restarts the application using subprocess for automated recovery."""
+    try:
+        logging.info("Restarting application...")
+        subprocess.Popen([sys.executable] + sys.argv)
+        sys.exit(0)  # Close the current instance after starting a new one
+    except Exception as e:
+        logging.error(f"Failed to restart application: {e}")
+        messagebox.showerror(
+            "Restart Failed",
+            "Could not restart the application. Please restart manually.",
+        )
+
+
+def handle_critical_error(error):
+    """Handle critical error and restart if needed."""
+    logging.critical(f"Critical error encountered: {error}")
+    response = messagebox.askyesno(
+        "Critical Error",
+        "The application encountered a critical error.\nWould you like to restart?",
+    )
+    if response:
+        restart_application()
+    else:
+        sys.exit(1)
+
+
+def watchdog(self):
+    """Watchdog thread to monitor application health and attempt recovery if needed."""
+    while True:
+        time.sleep(10)  # Check every 10 seconds
+        if not self.is_healthy():
+            logging.warning("Application health check failed. Attempting recovery.")
+            self.attempt_recovery()
+
+
+def is_healthy(self):
+    """Check application health by verifying core components are responsive."""
+    # Add checks here, by ensuring key objects are not None or verifying thread responsiveness
+    return self.afs_path is not None and self.tree.get_children()  # Simplified example
+
+
+def attempt_recovery(self):
+    """Attempt to recover the application by reloading resources or restarting components."""
+    try:
+        if self.afs_path:
+            with open(self.afs_path, "rb") as afs_file:
+                self.parse_afs(afs_file)  # Re-parse to attempt recovery
+            messagebox.showinfo("Recovery", "Application recovered successfully.")
+    except Exception as e:
+        logging.error(f"Recovery attempt failed: {e}")
+        messagebox.showerror(
+            "Recovery Failed",
+            "Automatic recovery was unsuccessful. Please restart the application.",
+        )
+
+
+def run_as_admin():
+    """Attempt to re-launch the application with elevated privileges."""
+    if not ctypes.windll.shell32.IsUserAnAdmin():
+        logging.info("Requesting admin privileges to continue.")
+        try:
+            # Relaunch the application with elevated privileges
+            subprocess.run(["runas", "/user:Administrator", sys.executable] + sys.argv)
+            sys.exit(0)  # Exit the current instance after launching the new one
+        except Exception as e:
+            logging.error(f"Failed to run as admin: {e}")
+            messagebox.showerror(
+                "Admin Privileges Required",
+                "Could not acquire administrator privileges.",
+            )
+    else:
+        logging.info("Already running with admin privileges.")
 
 
 class AFSUtility:
@@ -186,68 +322,80 @@ class AFSUtility:
         thread = threading.Thread(target=target, args=args)
         thread.start()
 
-    def register_file_association(self):
-        # Check if the platform is Windows
+    def register_file_association():
+        """Register .afs file association on Windows."""
         if sys.platform != "win32":
             logging.warning("File association is only supported on Windows.")
             return
 
-        # Check for admin privileges
+        # Check if the program is running with admin privileges
         try:
             if not ctypes.windll.shell32.IsUserAnAdmin():
                 raise PermissionError(
                     "Admin privileges required to modify file associations."
                 )
 
+            # Get the path to the executable
             executable_path = os.path.abspath(sys.executable)
             logging.info(f"Executable Path: {executable_path}")
 
-            # Create or open the .afs file association key
-            reg_path = r"Software\Classes\.afs"
-            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, reg_path) as key:
-                winreg.SetValue(key, "", winreg.REG_SZ, "AFSUtility.File")
-                logging.info(f"Set value for {reg_path}")
+            # Define registry paths and values
+            reg_paths = [
+                (r"Software\Classes\.afs", "", "AFSUtility.File"),
+                (r"Software\Classes\AFSUtility.File", "", "AFS Utility File"),
+                (
+                    r"Software\Classes\AFSUtility.File\DefaultIcon",
+                    "",
+                    f"{executable_path},0",
+                ),
+                (
+                    r"Software\Classes\AFSUtility.File\shell\open\command",
+                    "",
+                    f'"{executable_path}" "%1"',
+                ),
+            ]
 
-            # Create or open the AFSUtility.File key
-            reg_path = r"Software\Classes\AFSUtility.File"
-            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, reg_path) as key:
-                winreg.SetValue(key, "", winreg.REG_SZ, "AFS Utility File")
-                winreg.SetValue(
-                    key, "DefaultIcon", winreg.REG_SZ, f"{executable_path},0"
-                )
-                logging.info(f"Set values for {reg_path}")
-
-            # Create or open the shell\open\command key under AFSUtility.File
-            reg_path = r"Software\Classes\AFSUtility.File\shell\open\command"
-            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, reg_path) as key:
-                winreg.SetValue(key, "", winreg.REG_SZ, f'"{executable_path}" "%1"')
-                logging.info(f"Set command value for {reg_path}")
+            # Set registry keys for file association
+            for path, name, value in reg_paths:
+                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, path) as key:
+                    winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+                    logging.info(f"Set registry value: {path} -> {value}")
 
             logging.info("File association registered successfully.")
 
         except PermissionError:
-            # If PermissionError, inform the user and offer to re-run as admin
+            # Prompt to restart as admin
             response = messagebox.askyesno(
                 "Admin Privileges Required",
                 "Admin privileges are required to register file associations.\n"
                 "Would you like to restart this program as an administrator?",
             )
             if response:
-                # Relaunch the program with admin privileges
                 ctypes.windll.shell32.ShellExecuteW(
                     None, "runas", sys.executable, " ".join(sys.argv), None, 1
                 )
-        except FileNotFoundError as fnf_error:
-            logging.error(f"File not found: {fnf_error}")
+        except PermissionError:
+            logging.warning(
+                "Permission denied. File association requires admin privileges."
+            )
+            messagebox.showwarning(
+                "File Association",
+                "Admin privileges required to register file associations.",
+            )
         except Exception as e:
             logging.error(f"Failed to register file association: {e}")
+            messagebox.showerror(
+                "File Association Error", "Unable to complete file association setup."
+            )
+        else:
+            logging.info("File association registered successfully.")
 
     def create_new_afs_archive(self):
         # Start the archive creation in a separate thread
         self.run_in_thread(self._create_new_afs_archive)
 
     def _create_new_afs_archive(self):
-        """Creates a new AFS archive from selected files in a directory (runs in a background thread)."""
+        """Creates a new AFS archive, including file metadata and footer in TOC without affecting file count."""
         folder_path = filedialog.askdirectory(
             title="Select Folder with Files for New AFS Archive"
         )
@@ -281,6 +429,7 @@ class AFSUtility:
         file_data = []
         pointer = 0x800  # Start data section after 0x800 offset for the header
 
+        # Collect file data and metadata
         for file_name in files:
             file_path = os.path.join(folder_path, file_name)
             with open(file_path, "rb") as f:
@@ -291,10 +440,35 @@ class AFSUtility:
                 file_names.append(file_name.ljust(32, "\x00"))
                 pointer += (size + 0x7FF) & ~0x7FF  # Align to next 0x800 boundary
 
+        # Now calculate the footer pointer based on the last file’s data
+        footer_pointer = pointer
+        footer_size = 0x20
+        toc_entries.append(
+            (footer_pointer, footer_size)
+        )  # Append footer as "last listing" in TOC
+        footer_entries = []
+        for idx, (name, (file_pointer, file_size)) in enumerate(
+            zip(file_names, toc_entries)
+        ):
+            # Capture metadata: filename, creation date, and repeated TOC entries
+            creation_date = datetime.datetime.now()
+            footer_entries.append(
+                {
+                    "name": name,
+                    "pointer": file_pointer,
+                    "size": file_size,
+                    "creation_date": creation_date,
+                }
+            )
+
         try:
             with open(output_file, "wb") as afs_file:
                 afs_file.write(b"AFS\x00")  # AFS magic bytes
-                afs_file.write(struct.pack("<I", len(files)))  # Number of files
+                afs_file.write(
+                    struct.pack("<I", len(files))
+                )  # Actual file count, excludes footer
+
+                # Write the TOC entries for each file, includes footer
                 for toc_entry in toc_entries:
                     afs_file.write(struct.pack("<II", *toc_entry))
 
@@ -309,43 +483,42 @@ class AFSUtility:
                     padding = (0x800 - (len(data) % 0x800)) % 0x800
                     afs_file.write(b"\x00" * padding)
 
-                # Footer Writing
-                for idx, name in enumerate(file_names):
-                    afs_file.write(name.encode("latin1").ljust(0x20, b"\x00"))
+                # Align footer block to 2048-byte boundary
+                current_pos = afs_file.tell()
+                padding_needed = (0x800 - (current_pos % 0x800)) % 0x800
+                afs_file.write(b"\x00" * padding_needed)
 
-                    # Write file creation date (2 bytes each for YYMMDDHHMMSS)
-                    creation_date = datetime.datetime.now()
+                # Write footer block containing filenames, creation dates, pointers, and sizes
+                for entry in footer_entries:
                     afs_file.write(
-                        struct.pack("<H", creation_date.year)
-                    )  # 2 bytes for year
-                    afs_file.write(
-                        struct.pack("<H", creation_date.month)
-                    )  # 2 bytes for month
-                    afs_file.write(
-                        struct.pack("<H", creation_date.day)
-                    )  # 2 bytes for day
-                    afs_file.write(
-                        struct.pack("<H", creation_date.hour)
-                    )  # 2 bytes for hour
-                    afs_file.write(
-                        struct.pack("<H", creation_date.minute)
-                    )  # 2 bytes for minute
-                    afs_file.write(
-                        struct.pack("<H", creation_date.second)
-                    )  # 2 bytes for second
+                        entry["name"].encode("latin1")
+                    )  # File name padded to 32 bytes
 
-                    # Write 4-byte file size
-                    file_size = toc_entries[idx][1]
-                    afs_file.write(struct.pack("<I", file_size))
+                    # Write creation date
+                    afs_file.write(struct.pack("<H", entry["creation_date"].year))
+                    afs_file.write(struct.pack("<H", entry["creation_date"].month))
+                    afs_file.write(struct.pack("<H", entry["creation_date"].day))
+                    afs_file.write(struct.pack("<H", entry["creation_date"].hour))
+                    afs_file.write(struct.pack("<H", entry["creation_date"].minute))
+                    afs_file.write(struct.pack("<H", entry["creation_date"].second))
 
+                    # Writes the Size
+                    afs_file.write(struct.pack("<I", entry["size"]))
+
+                # Align copyright footer to 2048-byte boundary
+                current_pos = afs_file.tell()
+                padding_needed = (0x800 - (current_pos % 0x800)) % 0x800
+                afs_file.write(b"\x00" * padding_needed)
+
+                # Write copyright footer
                 copyright_footer = "© 2024 AFS Utility".ljust(32, "\x00")
                 afs_file.write(copyright_footer.encode("latin1"))
 
+                # Final padding to align the file after the copyright footer
                 current_pos = afs_file.tell()
                 padding_needed = (0x800 - (current_pos % 0x800)) % 0x800
-                afs_file.write(b"\x00" * padding_needed)  # Add padding to align
+                afs_file.write(b"\x00" * padding_needed)
 
-            # Notify success on the main thread
             self.root.after(
                 0,
                 lambda: messagebox.showinfo(
@@ -354,7 +527,6 @@ class AFSUtility:
             )
 
         except Exception as e:
-            # Notify error on the main thread
             self.root.after(
                 0,
                 lambda: messagebox.showerror(
@@ -408,26 +580,30 @@ class AFSUtility:
         self.run_in_thread(extract_files)
 
     def load_afs_file(self):
+        """Load an AFS file with graceful degradation on error."""
         afs_path = filedialog.askopenfilename(
             title="Select File", filetypes=[("Sofdec Archive File System", "*.afs")]
         )
         if afs_path:
             self.afs_path = afs_path  # Store the AFS path for later usage
             try:
-                # Attempt to load the descriptions from the JSON file
-                self.load_description_json()
-
+                self.load_description_json()  # Attempt to load description.json
                 with open(self.afs_path, "rb") as afs_file:
                     self.parse_afs(afs_file)
-            except FileNotFoundError as fnf_error:
-                logging.error(f"File not found: {fnf_error}")
-                messagebox.showerror("Error", f"File not found: {fnf_error}")
-            except PermissionError as perm_error:
-                logging.error(f"Permission error: {perm_error}")
-                messagebox.showerror("Error", f"Permission error: {perm_error}")
+            except FileNotFoundError:
+                messagebox.showerror(
+                    "File Not Found", "The selected file does not exist."
+                )
+                logging.error("AFS file not found.")
+            except PermissionError:
+                messagebox.showerror(
+                    "Permission Denied",
+                    "Cannot access the file due to permission issues.",
+                )
+                logging.error("Permission denied while accessing AFS file.")
             except Exception as e:
-                logging.error(f"Failed to load AFS file: {e}")
                 messagebox.showerror("Error", f"Failed to load AFS file: {e}")
+                logging.error(f"Failed to load AFS file: {e}")
 
     def load_description_json(self):
         """Load descriptions from description.json if it exists."""
@@ -578,15 +754,25 @@ class AFSUtility:
         finally:
             self.context_menu.grab_release()
 
-    def read_from_afs_file(self, pointer, size):
-        """Helper function to read data from the AFS file at a specific pointer."""
-        try:
-            with open(self.afs_path, "rb") as afs_file:
-                afs_file.seek(pointer)
-                return afs_file.read(size)
-        except Exception as e:
-            logging.error(f"Failed to read data from AFS file: {e}")
-            raise
+    def read_from_afs_file(self, pointer, size, retries=3):
+        """Helper function to read data from the AFS file at a specific pointer with retries for recovery."""
+        attempt = 0
+        while attempt < retries:
+            try:
+                with open(self.afs_path, "rb") as afs_file:
+                    afs_file.seek(pointer)
+                    return afs_file.read(size)
+            except IOError as e:
+                logging.error(f"Read attempt {attempt+1} failed: {e}")
+                attempt += 1
+                time.sleep(0.5)  # Wait before retrying
+            except Exception as e:
+                logging.error(f"Unexpected error while reading from AFS file: {e}")
+                raise e  # Raise unexpected errors immediately
+        messagebox.showerror(
+            "Read Error", "Failed to read data after multiple attempts."
+        )
+        return None  # Return None if all attempts fail
 
     def extract_selected_file(self):
         selected_item = self.tree.selection()
