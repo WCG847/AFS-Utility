@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import psutil
+import shlex
 import struct
 import subprocess
 import sys
@@ -188,7 +189,8 @@ def run_as_admin():
         logging.info("Requesting admin privileges to continue.")
         try:
             # Relaunch the application with elevated privileges
-            subprocess.run(["runas", "/user:Administrator", sys.executable] + sys.argv)
+            safe_args = [shlex.quote(arg) for arg in sys.argv]
+            subprocess.run(["runas", "/user:Administrator", sys.executable] + safe_args)
             sys.exit(0)  # Exit the current instance after launching the new one
         except Exception as e:
             logging.error(f"Failed to run as admin: {e}")
