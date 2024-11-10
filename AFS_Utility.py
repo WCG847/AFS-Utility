@@ -5,12 +5,16 @@ import logging
 import os
 import psutil
 import shlex
+import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
+import uuid
+
 
 import pywintypes
 import win32api
@@ -304,6 +308,13 @@ class AFSUtility:
             label="Upload Description.json", command=self.upload_description_json
         )
 
+        # Update context menu for sound playing and conversion
+        self.context_menu.add_command(label="Play Sound", command=self.play_selected_file)
+        self.context_menu.add_command(label="Convert to WAV", command=self.convert_selected_file)
+        
+        # Bind Ctrl+P to play sound
+        root.bind("<Control-p>", lambda event: self.play_selected_file())
+
         # Binding right-click key
         self.tree.bind("<Button-3>", self.show_context_menu)
 
@@ -395,6 +406,71 @@ class AFSUtility:
     def run_in_thread(self, target, *args):
         thread = threading.Thread(target=target, args=args)
         thread.start()
+
+    def extract_file_to_temp(self, pointer, size):
+        """Extracts the selected file to a temporary directory and returns the path."""
+        temp_dir = os.path.join(tempfile.gettempdir(), str(uuid.uuid4()))
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        file_data = self.read_from_afs_file(pointer, size)
+        if file_data is None:
+            return None
+        
+        temp_file_path = os.path.join(temp_dir, "audiofile.adx")
+        with open(temp_file_path, "wb") as temp_file:
+            temp_file.write(file_data)
+        
+        return temp_file_path
+
+    def play_selected_file(self):
+        selected_item = self.tree.selection()
+        if not selected_item:
+            messagebox.showwarning("Warning", "No file selected.")
+            return
+        file_index = self.tree.index(selected_item[0])
+        pointer, size = self.toc_entries[file_index]
+
+        # Extract file to temporary directory
+        temp_file_path = self.extract_file_to_temp(pointer, size)
+        if temp_file_path is None:
+            return
+
+        # Use ffplay to play the audio file
+        try:
+            subprocess.run(["ffplay", "-autoexit", temp_file_path])
+        finally:
+            # Cleanup the temporary file
+            shutil.rmtree(os.path.dirname(temp_file_path), ignore_errors=True)
+
+    def convert_selected_file(self):
+        selected_item = self.tree.selection()
+        if not selected_item:
+            messagebox.showwarning("Warning", "No file selected.")
+            return
+        file_index = self.tree.index(selected_item[0])
+        pointer, size = self.toc_entries[file_index]
+
+        # Extract file to temporary directory
+        temp_file_path = self.extract_file_to_temp(pointer, size)
+        if temp_file_path is None:
+            return
+
+        # Prompt user for save location and file name
+        save_path = filedialog.asksaveasfilename(defaultextension=".wav", filetypes=[("WAV files", "*.wav")])
+        if not save_path:
+            # User canceled the save dialog
+            shutil.rmtree(os.path.dirname(temp_file_path), ignore_errors=True)
+            return
+
+        # Use ffmpeg to convert the file to WAV
+        try:
+            subprocess.run(["ffmpeg", "-i", temp_file_path, save_path], check=True)
+            messagebox.showinfo("Conversion Complete", f"File converted successfully to {save_path}")
+        except subprocess.CalledProcessError as e:
+            messagebox.showerror("Conversion Error", f"Failed to convert file: {e}")
+        finally:
+            # Cleanup the temporary file
+            shutil.rmtree(os.path.dirname(temp_file_path), ignore_errors=True)
 
     def create_new_afs_archive(self):
         # Start the archive creation in a separate thread
