@@ -130,7 +130,8 @@ def restart_application():
     """Restarts the application using subprocess for automated recovery."""
     try:
         logging.info("Restarting application...")
-        subprocess.Popen([sys.executable] + sys.argv)
+        safe_args = [shlex.quote(arg) for arg in sys.argv]
+        subprocess.Popen([sys.executable] + safe_args)
         sys.exit(0)  # Close the current instance after starting a new one
     except Exception as e:
         logging.error(f"Failed to restart application: {e}")
