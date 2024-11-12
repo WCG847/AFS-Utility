@@ -301,7 +301,7 @@ class AFSUtility:
         # Initialise default settings
         self.settings = {
             "theme": "light",  # default theme
-            "font": "Arial",  # default font
+            "font": "Helvetica",  # default font
         }
 
         # Try loading settings from the config file
