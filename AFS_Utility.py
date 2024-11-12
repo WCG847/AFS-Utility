@@ -310,6 +310,20 @@ class AFSUtility:
         # Apply theme and font
         self.apply_theme_and_font()
 
+        # Determine the base directory dynamically
+        if getattr(sys, "frozen", False):
+            # If running as a compiled bundle, use the temporary path provided by PyInstaller
+            base_dir = sys._MEIPASS
+        else:
+            # If running as a script, use the directory where the script is located
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # Set icon path relative to the base directory
+        icon_path = os.path.join(base_dir, "AFS_Utility.ico")
+
+        # Set the window icon
+        self.root.iconbitmap(icon_path)
+
         # Ensure the application runs with admin privileges
         run_as_admin()
 
