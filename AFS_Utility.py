@@ -20,6 +20,7 @@ import win32process
 import winreg
 
 from functools import partial
+from datetime import datetime
 from decimal import Decimal
 from PIL import Image, ImageTk
 import tkinter as tk
@@ -1163,27 +1164,35 @@ class AFSUtility:
 
         afs_file.seek(expected_footer_start)
 
+        # File names, dates, and sizes storage
         self.file_names = []
         self.file_dates = []  # List to store parsed dates
         self.file_sizes = []  # List to store parsed file sizes
+
+        default_date = datetime(1970, 1, 1, 0, 0, 0)  # Define default date
 
         for _ in range(self.file_count):
             # File name parsing
             name = afs_file.read(0x20).decode("latin1").strip("\x00")
             self.file_names.append(name)
 
-            # Read the creation date (formatted as YYMMDDHHMMSS in 2 bytes each)
-            year = struct.unpack("<H", afs_file.read(2))[0]
-            month = struct.unpack("<H", afs_file.read(2))[0]
-            day = struct.unpack("<H", afs_file.read(2))[0]
-            hour = struct.unpack("<H", afs_file.read(2))[0]
-            minute = struct.unpack("<H", afs_file.read(2))[0]
-            second = struct.unpack("<H", afs_file.read(2))[0]
+            try:
+                # Read the creation date (formatted as YYMMDDHHMMSS in 2 bytes each)
+                year = struct.unpack("<H", afs_file.read(2))[0]
+                month = struct.unpack("<H", afs_file.read(2))[0]
+                day = struct.unpack("<H", afs_file.read(2))[0]
+                hour = struct.unpack("<H", afs_file.read(2))[0]
+                minute = struct.unpack("<H", afs_file.read(2))[0]
+                second = struct.unpack("<H", afs_file.read(2))[0]
 
-            file_date = datetime.datetime(year, month, day, hour, minute, second)
-            self.file_dates.append(
-                file_date.strftime("%Y-%m-%d %H:%M:%S")
-            )  # Store formatted date
+                # Attempt to create a date object, defaulting to the specified date if invalid
+                file_date = datetime(year, month, day, hour, minute, second)
+            except (ValueError, OverflowError):
+                # If an error occurs, use the default date
+                logging.warning(f"Invalid date for file '{name}', using default date.")
+                file_date = default_date
+
+            self.file_dates.append(file_date.strftime("%Y-%m-%d %H:%M:%S"))
 
             # Read 4-byte file size
             file_size = struct.unpack("<I", afs_file.read(4))[0]
