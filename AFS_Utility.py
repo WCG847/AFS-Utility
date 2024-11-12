@@ -294,6 +294,21 @@ class AFSUtility:
     def __init__(self, root):
         self.root = root
         self.root.title("AFS Utility")
+        self.config_path = os.path.join(
+            os.getenv("LOCALAPPDATA"), "wcg847", "AFS Utility", "config", "config.json"
+        )
+
+        # Initialise default settings
+        self.settings = {
+            "theme": "light",  # default theme
+            "font": "Arial",  # default font
+        }
+
+        # Try loading settings from the config file
+        self.load_settings()
+
+        # Apply theme and font
+        self.apply_theme_and_font()
 
         # Ensure the application runs with admin privileges
         run_as_admin()
@@ -415,6 +430,10 @@ class AFSUtility:
             label="Register File Association", command=register_file_association
         )
 
+        pref_menu = tk.Menu(self.menu, tearoff=0)
+        pref_menu.add_command(label="Settings", command=self.pref_display)
+        self.menu.add_cascade(label="Preferences", menu=pref_menu)
+
         help_menu = tk.Menu(self.menu, tearoff=0)
         self.menu.add_cascade(label="Help", menu=help_menu)
         help_menu.add_command(
@@ -484,6 +503,102 @@ class AFSUtility:
     def run_in_thread(self, target, *args):
         thread = threading.Thread(target=target, args=args)
         thread.start()
+
+    def pref_display(self):
+        # Create a new window for preferences
+        pref_window = tk.Toplevel(self.root)
+        pref_window.title("Preferences")
+
+        # Theme selection
+        theme_label = tk.Label(pref_window, text="Select Theme:")
+        theme_label.grid(row=0, column=0, padx=10, pady=10)
+
+        theme_var = tk.StringVar(value=self.settings["theme"])
+        light_theme_rb = tk.Radiobutton(
+            pref_window, text="Light", variable=theme_var, value="light"
+        )
+        dark_theme_rb = tk.Radiobutton(
+            pref_window, text="Dark", variable=theme_var, value="dark"
+        )
+
+        light_theme_rb.grid(row=0, column=1, padx=10, pady=10)
+        dark_theme_rb.grid(row=0, column=2, padx=10, pady=10)
+
+        # Font selection
+        font_label = tk.Label(pref_window, text="Select Font:")
+        font_label.grid(row=1, column=0, padx=10, pady=10)
+
+        font_list = list(tkfont.families())
+        font_var = tk.StringVar(value=self.settings["font"])
+        font_menu = ttk.Combobox(
+            pref_window, textvariable=font_var, values=font_list, state="readonly"
+        )
+        font_menu.grid(row=1, column=1, padx=10, pady=10)
+
+        # Save button
+        save_button = tk.Button(
+            pref_window,
+            text="Save",
+            command=lambda: self.save_preferences(
+                theme_var.get(), font_var.get(), pref_window
+            ),
+        )
+        save_button.grid(row=2, column=0, columnspan=3, pady=20)
+
+    def save_preferences(self, theme, font, window):
+        # Update settings in memory
+        self.settings["theme"] = theme
+        self.settings["font"] = font
+
+        # Ensure directory for config path exists
+        config_dir = os.path.dirname(self.config_path)
+        try:
+            if not os.path.exists(config_dir):
+                os.makedirs(config_dir)
+                logging.debug(f"Created directory for config at {config_dir}")
+        except Exception as e:
+            logging.error(f"Failed to create directory for config: {e}")
+            messagebox.showerror("Error", f"Failed to create directory: {e}")
+            return
+
+        # Save settings to config.json
+        try:
+            with open(self.config_path, "w") as config_file:
+                json.dump(self.settings, config_file, indent=4)
+            logging.info(f"Settings saved to {self.config_path}")
+        except Exception as e:
+            logging.error(f"Failed to save settings: {e}")
+            messagebox.showerror("Error", f"Failed to save settings: {e}")
+            return
+
+        # Apply changes and close preferences window
+        self.apply_theme_and_font()
+        window.destroy()
+        messagebox.showinfo("Settings Saved", "Your preferences have been saved.")
+
+    def apply_theme_and_font(self):
+        # Apply the selected theme and font
+        if self.settings["theme"] == "dark":
+            self.root.configure(bg="black")
+            self.root.option_add("*foreground", "white")
+            self.root.option_add("*background", "black")
+        else:
+            self.root.configure(bg="white")
+            self.root.option_add("*foreground", "black")
+            self.root.option_add("*background", "white")
+
+        # Apply selected font to the whole window
+        font = (self.settings["font"], 10)
+        self.root.option_add("*font", font)
+
+    def load_settings(self):
+        # Load settings from config.json if it exists
+        if os.path.exists(self.config_path):
+            try:
+                with open(self.config_path, "r") as config_file:
+                    self.settings = json.load(config_file)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load settings: {e}")
 
     def on_exit(self):
         """Ensure playback stops on exit."""
@@ -1070,6 +1185,7 @@ class AFSUtility:
                 "Parsing Error",
                 "The number of file names does not match the file count.",
             )
+            logging.error(f"The number of file names does not match the file count.")
             return
 
         # Print the parsed file names for verification
@@ -1115,15 +1231,61 @@ class AFSUtility:
             ]
 
     def format_size(self, size):
-        if size == 0:
-            return "0 B"
-        units = ["B", "KB", "MB", "GB", "TB", "PB", "EB"]
-        size = Decimal(size)
-        index = 0
-        while size >= 1024 and index < len(units) - 1:
-            size /= 1024
-            index += 1
-        return f"{size.quantize(Decimal('0.1'))} {units[index]}"
+        try:
+            # Validate input size
+            if not isinstance(size, (int, float, Decimal)):
+                logging.error(
+                    f"Invalid size input: {size}. Expected int, float, or Decimal."
+                )
+                raise ValueError("Input size must be an integer, float, or Decimal.")
+
+            if size < 0:
+                logging.warning(
+                    f"Negative size detected: {size}. File sizes cannot be negative."
+                )
+                raise ValueError("File size cannot be negative.")
+
+            # Handle zero size early
+            if size == 0:
+                logging.info(f"Zero size detected. Returning 0 B.")
+                return "0 B"
+
+            units = ["B", "KB", "MB", "GB", "TB", "PB", "EB"]
+            size = Decimal(size)
+            index = 0
+
+            # Detect possible infinite loop or overflow
+            if size > Decimal("1e+30"):  # Arbitrary large threshold to prevent overflow
+                logging.error(
+                    f"Overflow risk detected with size: {size}. Value is too large."
+                )
+                raise OverflowError(f"Size {size} exceeds safe limit.")
+
+            logging.info(f"Starting size conversion for {size} bytes.")
+
+            # Conversion process with unit shifting
+            while size >= 1024 and index < len(units) - 1:
+                logging.debug(
+                    f"Converting: {size} >= 1024, shifting unit to {units[index + 1]}."
+                )
+                size /= 1024
+                index += 1
+
+            # Watchdog 4: Precision control
+            formatted_size = f"{size.quantize(Decimal('0.1'))} {units[index]}"
+            logging.info(f"Formatted size: {formatted_size}")
+
+            return formatted_size
+
+        except ValueError as ve:
+            logging.error(f"Value error occurred: {ve}")
+            raise
+        except OverflowError as oe:
+            logging.error(f"Overflow error occurred: {oe}")
+            raise
+        except Exception as e:
+            logging.error(f"Unexpected error occurred: {e}")
+            raise
 
     def show_context_menu(self, event):
         try:
