@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import psutil
-import re
 import shlex
 import shutil
 import struct
@@ -14,14 +13,12 @@ import tempfile
 import threading
 import time
 import traceback
-import uuid
 
 
 import pywintypes
 import win32api
 import win32con
 import win32process
-import win32gui
 import winreg
 
 from functools import partial
@@ -452,11 +449,54 @@ class AFSUtility:
 
         return temp_file_path
 
+    def get_audio_duration(self, file_path):
+        """Extract the duration of an audio file using ffprobe."""
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                startupinfo=self.get_hidden_startupinfo()
+            )
+            duration = float(result.stdout.strip())
+            return duration
+        except Exception as e:
+            logging.error(f"Error getting audio duration: {e}")
+            return None
+
     def get_hidden_startupinfo(self):
         """Returns startup info to hide console window on Windows."""
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         return startupinfo
+
+    def generate_waveform(self, file_path):
+        """Generates a waveform image using ffmpeg and returns the image path."""
+        temp_dir = tempfile.mkdtemp()
+        waveform_path = os.path.join(temp_dir, "waveform.png")
+        
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", file_path, "-filter_complex", "aformat=channel_layouts=mono,showwavespic=s=600x120", "-frames:v", "1", waveform_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                startupinfo=self.get_hidden_startupinfo()
+            )
+            return waveform_path
+        except Exception as e:
+            logging.error(f"Error generating waveform: {e}")
+            return None
+
+    def display_waveform(self, waveform_path):
+        """Display the waveform image in the GUI."""
+        try:
+            waveform_image = Image.open(waveform_path)
+            waveform_photo = ImageTk.PhotoImage(waveform_image)
+            self.waveform_label.config(image=waveform_photo)
+            self.waveform_label.image = waveform_photo
+        except Exception as e:
+            logging.error(f"Error displaying waveform: {e}")
 
     def play_selected_file(self):
         selected_item = self.tree.selection()
@@ -475,6 +515,12 @@ class AFSUtility:
         temp_file_path = self.extract_file_to_temp(file_name, file_data)
         if temp_file_path is None:
             return
+
+        # Get audio duration and generate waveform for the GUI
+        duration = self.get_audio_duration(temp_file_path)
+        waveform_path = self.generate_waveform(temp_file_path)
+        if waveform_path:
+            self.display_waveform(waveform_path)
 
         # Determine whether to play as video (SFD) or audio (ADX)
         if self.is_sfd_file(temp_file_path):
@@ -659,7 +705,7 @@ class AFSUtility:
         output_file = filedialog.asksaveasfilename(
             title="Save New AFS Archive As",
             defaultextension=".afs",
-            filetypes=[("AFS Files", "*.afs")],
+            filetypes=[("CRIWare Archive File System", "*.afs")],
         )
         if not output_file:
             return
@@ -829,7 +875,7 @@ class AFSUtility:
         """Load an AFS file with graceful degradation on error."""
         if not afs_path:
             afs_path = filedialog.askopenfilename(
-                title="Select File", filetypes=[("Sofdec Archive File System", "*.afs")]
+                title="Select File", filetypes=[("CRIWare Archive File System", "*.afs")]
             )
 
         if afs_path:
@@ -874,7 +920,7 @@ class AFSUtility:
         header = afs_file.read(4)
         if header[:3] != b"AFS" or header[3] != 0x00:
             messagebox.showerror(
-                "Invalid Format", "The file is not a valid Sofdec archive."
+                "Invalid Format", "The file is not a valid CRIWare archive."
             )
             return
 
