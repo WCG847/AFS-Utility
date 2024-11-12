@@ -15,15 +15,13 @@ import time
 import traceback
 
 
-import pywintypes
-import win32api
 import win32con
 import win32process
 import winreg
 
 from functools import partial
 from decimal import Decimal
-from PIL import Image, ImageTk, ImageDraw
+from PIL import Image, ImageTk
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter import Label
@@ -71,46 +69,111 @@ def set_process_priority(priority_class):
         logging.error(f"Failed to set process priority: {e}")
 
 
+# Constants for minidump creation
+MiniDumpNormal = 0x00000000
+MiniDumpWithDataSegs = 0x00000001
+MiniDumpWithFullMemory = 0x00000002
+MiniDumpWithHandleData = 0x00000004
+MiniDumpFilterMemory = 0x00000008
+MiniDumpWithUnloadedModules = 0x00000010
+MiniDumpWithIndirectlyReferencedMemory = 0x00000020
+MiniDumpFilterModulePaths = 0x00000040
+MiniDumpWithProcessThreadData = 0x00000080
+MiniDumpWithPrivateReadWriteMemory = 0x00000100
+MiniDumpWithoutOptionalData = 0x00000200
+MiniDumpWithFullMemoryInfo = 0x00000400
+MiniDumpWithThreadInfo = 0x00000800
+MiniDumpWithCodeSegs = 0x00001000
+
+# Load dbghelp.dll (which contains MiniDumpWriteDump)
+dbghelp = ctypes.windll.dbghelp
+
+
+# Exception and Context structures (for generating a minidump)
+class EXCEPTION_POINTERS(ctypes.Structure):
+    _fields_ = [("ExceptionRecord", ctypes.c_ulong), ("ContextRecord", ctypes.c_ulong)]
+
+
+class CONTEXT(ctypes.Structure):
+    _fields_ = [
+        ("ContextFlags", ctypes.c_ulong),
+        ("Dr0", ctypes.c_ulong),
+        ("Dr1", ctypes.c_ulong),
+        ("Dr2", ctypes.c_ulong),
+        ("Dr3", ctypes.c_ulong),
+        ("Dr6", ctypes.c_ulong),
+        ("Dr7", ctypes.c_ulong),
+        ("FloatSave", ctypes.c_byte * 512),
+        ("SegGs", ctypes.c_ulong),
+        ("SegFs", ctypes.c_ulong),
+        ("SegEs", ctypes.c_ulong),
+        ("SegDs", ctypes.c_ulong),
+        ("Edi", ctypes.c_ulong),
+        ("Esi", ctypes.c_ulong),
+        ("Ebx", ctypes.c_ulong),
+        ("Edx", ctypes.c_ulong),
+        ("Ecx", ctypes.c_ulong),
+        ("Eax", ctypes.c_ulong),
+        ("Ebp", ctypes.c_ulong),
+        ("Eip", ctypes.c_ulong),
+        ("SegCs", ctypes.c_ulong),
+        ("EFlags", ctypes.c_ulong),
+        ("Esp", ctypes.c_ulong),
+        ("SegSs", ctypes.c_ulong),
+        ("ExtendedRegisters", ctypes.c_byte * 512),
+    ]
+
+
+# Function to write minidump
 def write_minidump(exception_type, exception_value, tb):
-    """Write a mini-dump to disk when a crash happens."""
-    dump_dir = os.path.join(
-        os.getenv("LOCALAPPDATA"), "wcg847", "AFS Utility", "crashdumps"
-    )
+    dump_dir = os.path.join(os.getenv("LOCALAPPDATA"), "CrashDumps")
     os.makedirs(dump_dir, exist_ok=True)
 
-    # Construct dump file path with a timestamp
+    # Generate the dump file path with a unique timestamp and process ID
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    dump_file = os.path.join(dump_dir, f"crash_{timestamp}.dmp")
+    dump_file = os.path.join(dump_dir, f"AFSUtility.{timestamp}.dmp")
 
-    # Log the exception before dumping
+    # Log the exception details
     logging.error("Uncaught exception: %s", exception_value)
     logging.error(
         "Stack trace:\n%s",
         "".join(traceback.format_exception(exception_type, exception_value, tb)),
     )
 
+    # Set up the EXCEPTION_POINTERS and CONTEXT structures
+    exception_info = EXCEPTION_POINTERS()
+    context_info = CONTEXT()
+
     try:
-        # Set up mini-dump creation using pywin32 (exception type, exception value, traceback)
-        hProcess = win32api.GetCurrentProcess()
-        exception_info = pywintypes.BSTR(str(exception_value))
-        logging.info(f"Creating crash dump at {dump_file}")
+        # Open the dump file for writing
+        with open(dump_file, "wb") as dump_file_handle:
+            # Call MiniDumpWriteDump to generate the minidump
+            result = dbghelp.MiniDumpWriteDump(
+                ctypes.windll.kernel32.GetCurrentProcess(),
+                os.getpid(),
+                dump_file_handle.fileno(),
+                MiniDumpWithDataSegs
+                | MiniDumpWithFullMemory
+                | MiniDumpWithProcessThreadData,
+                ctypes.byref(exception_info),
+                ctypes.byref(context_info),
+                None,
+            )
 
-        # Save the minidump
-        win32process.CreateProcess(
-            None, sys.argv[0], None, None, 0, 0, None, None, None, None
-        )
-
-        # Now use the Debugger or another appropriate API to capture crash dumps
-        with open(dump_file, "w") as f:
-            f.write(f"Crash dump saved on: {timestamp}\n")
-            f.write(f"Exception: {exception_value}\n")
-            f.write(f"Stack Trace:\n{traceback.format_exc()}")
+            # Check if the dump was written successfully
+            if result == 0:
+                logging.error(
+                    f"Failed to create minidump. Error code: {ctypes.windll.kernel32.GetLastError()}"
+                )
+            else:
+                logging.info(f"Minidump successfully created at: {dump_file}")
     except Exception as e:
         logging.error(f"Failed to write crash dump: {e}")
+        logging.error("Error while creating minidump.")
 
 
+# Install the custom exception handler
 def install_exception_handler():
-    """Set up custom exception handler to catch unhandled exceptions."""
     sys.excepthook = write_minidump
 
 
@@ -453,11 +516,20 @@ class AFSUtility:
         """Extract the duration of an audio file using ffprobe."""
         try:
             result = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file_path],
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    file_path,
+                ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                startupinfo=self.get_hidden_startupinfo()
+                startupinfo=self.get_hidden_startupinfo(),
             )
             duration = float(result.stdout.strip())
             return duration
@@ -475,13 +547,23 @@ class AFSUtility:
         """Generates a waveform image using ffmpeg and returns the image path."""
         temp_dir = tempfile.mkdtemp()
         waveform_path = os.path.join(temp_dir, "waveform.png")
-        
+
         try:
             subprocess.run(
-                ["ffmpeg", "-y", "-i", file_path, "-filter_complex", "aformat=channel_layouts=mono,showwavespic=s=600x120", "-frames:v", "1", waveform_path],
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    file_path,
+                    "-filter_complex",
+                    "aformat=channel_layouts=mono,showwavespic=s=600x120",
+                    "-frames:v",
+                    "1",
+                    waveform_path,
+                ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                startupinfo=self.get_hidden_startupinfo()
+                startupinfo=self.get_hidden_startupinfo(),
             )
             return waveform_path
         except Exception as e:
@@ -875,7 +957,8 @@ class AFSUtility:
         """Load an AFS file with graceful degradation on error."""
         if not afs_path:
             afs_path = filedialog.askopenfilename(
-                title="Select File", filetypes=[("CRIWare Archive File System", "*.afs")]
+                title="Select File",
+                filetypes=[("CRIWare Archive File System", "*.afs")],
             )
 
         if afs_path:
