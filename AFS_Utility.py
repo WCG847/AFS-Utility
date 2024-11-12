@@ -1102,7 +1102,7 @@ class AFSUtility:
                 "end",
                 values=(
                     name,
-                    f"0x{pointer:X}",
+                    str(pointer),
                     formatted_size,
                     self.file_dates[idx],
                     description,
@@ -1322,7 +1322,7 @@ class AFSUtility:
             formatted_size = self.format_size(size)
             description = self.descriptions.get(name, "")
             self.tree.insert(
-                "", "end", values=(name, f"0x{pointer:X}", formatted_size, description)
+                "", "end", values=(name, str(pointer), formatted_size, description)
             )
 
     def setup_search_bar(self):
