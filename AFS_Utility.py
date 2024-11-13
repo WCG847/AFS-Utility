@@ -400,6 +400,8 @@ class AFSUtility:
         self.context_menu.add_command(
             label="Upload Description.json", command=self.upload_description_json
         )
+        # Add the repair option to the context menu
+        self.context_menu.add_command(label="Repair", command=self.repair_afs_file)
 
         self.current_playback_process = None  # Track the current playback process
         self.is_playing = False  # Track playback state
@@ -1137,15 +1139,22 @@ class AFSUtility:
             )
             return
 
-        # Number of files in AFS
-        self.file_count = struct.unpack("<I", afs_file.read(4))[0]
+        # Original file count in AFS header
+        original_file_count = struct.unpack("<I", afs_file.read(4))[0]
 
-        # Start of TOC
+        # Start of TOC and identification of nullified files
         self.toc_entries = []
-        for _ in range(self.file_count):
+        nullified_count = 0  # Counter for nullified files
+        for _ in range(original_file_count):
             pointer = struct.unpack("<I", afs_file.read(4))[0]
             size = struct.unpack("<I", afs_file.read(4))[0]
+            if pointer == 0 and size == 0:
+                nullified_count += 1  # Track nullified entries
+                continue  # Skip nullified entries
             self.toc_entries.append((pointer, size))
+
+        # Adjusted file count after skipping nullified files
+        self.file_count = original_file_count - nullified_count
 
         # Calculate expected footer start location
         last_entry_pointer, last_entry_size = self.toc_entries[-1]
@@ -1252,6 +1261,41 @@ class AFSUtility:
             self.original_data = [
                 (self.tree.item(item, "values")) for item in self.tree.get_children()
             ]
+
+    def repair_afs_file(self):
+        """Remove nullified files (with pointer and size zero) from the AFS file and save a repaired version."""
+        if not self.afs_path:
+            messagebox.showerror("Error", "No AFS file loaded.")
+            return
+
+        # Filter out nullified files
+        self.toc_entries = [
+            entry for entry in self.toc_entries if not (entry[0] == 0 and entry[1] == 0)
+        ]
+        self.file_names = [
+            name
+            for name, entry in zip(self.file_names, self.toc_entries)
+            if not (entry[0] == 0 and entry[1] == 0)
+        ]
+        self.file_count = len(self.toc_entries)  # Adjust the file count
+
+        # Save the repaired AFS file
+        try:
+            with open(self.afs_path, "wb") as afs_file:
+                afs_file.write(b"AFS\x00")
+                afs_file.write(struct.pack("<I", self.file_count))
+
+                for pointer, size in self.toc_entries:
+                    afs_file.write(struct.pack("<II", pointer, size))
+
+                # Optionally, update footer data here if needed
+
+            messagebox.showinfo(
+                "Repair Complete", "Nullified files removed successfully."
+            )
+        except IOError as e:
+            logging.error(f"Failed to repair AFS file: {e}")
+            messagebox.showerror("Error", f"Failed to repair AFS file: {e}")
 
     def format_size(self, size):
         try:
