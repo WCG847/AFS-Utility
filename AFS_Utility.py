@@ -212,7 +212,9 @@ def run_as_admin():
         if not ctypes.windll.shell32.IsUserAnAdmin():
             logging.info("Requesting admin privileges to continue.")
             # Use ShellExecuteW to launch the application with the runas verb
-            params = " ".join(sys.argv[1:])  # Pass only arguments (not the script itself)
+            params = " ".join(
+                sys.argv[1:]
+            )  # Pass only arguments (not the script itself)
             executable = sys.executable
             result = ctypes.windll.shell32.ShellExecuteW(
                 None,  # Parent window (None for no parent)
@@ -220,7 +222,7 @@ def run_as_admin():
                 executable,  # Program to run
                 params,  # Command-line parameters
                 None,  # Working directory (None for default)
-                1  # Show window (1 for normal, 0 for hidden)
+                1,  # Show window (1 for normal, 0 for hidden)
             )
             if result <= 32:
                 raise Exception(f"ShellExecuteW failed with error code: {result}")
@@ -516,7 +518,7 @@ class AFSUtility:
         """Update the heartbeat timestamp to indicate active processing."""
         self.last_heartbeat = time.time()
         logging.debug("Heartbeat updated.")
-    
+
     def watchdog(self):
         """Monitor the application's health, distinguishing between hang and inactivity."""
         max_inactive_duration = 30  # seconds, adjust based on expected task duration
@@ -547,13 +549,14 @@ class AFSUtility:
     def run_in_thread(self, target, *args, timeout=None, max_retries=1):
         """
         Runs a target function in a new thread with enhanced lifecycle management.
-        
+
         Parameters:
         - target: Callable to execute in the thread.
         - args: Positional arguments for the target function.
         - timeout: Maximum allowed time for the thread to complete (in seconds). Default is None (no timeout).
         - max_retries: Maximum number of times to retry in case of failure. Default is 1.
         """
+
         def thread_wrapper():
             nonlocal retries
             try:
@@ -566,7 +569,9 @@ class AFSUtility:
                         break  # Exit loop if successful
                     except Exception as e:
                         retries += 1
-                        logging.error(f"Error in thread ({target.__name__}): {e}. Retrying {retries}/{max_retries}")
+                        logging.error(
+                            f"Error in thread ({target.__name__}): {e}. Retrying {retries}/{max_retries}"
+                        )
                         if retries > max_retries:
                             raise
                         time.sleep(2)  # Backoff before retrying
@@ -574,10 +579,16 @@ class AFSUtility:
                     # Timeout enforcement
                     elapsed_time = time.time() - start_time
                     if timeout and elapsed_time > timeout:
-                        logging.error(f"Thread {target.__name__} timed out after {timeout} seconds.")
-                        raise TimeoutError(f"Execution of {target.__name__} exceeded timeout.")
+                        logging.error(
+                            f"Thread {target.__name__} timed out after {timeout} seconds."
+                        )
+                        raise TimeoutError(
+                            f"Execution of {target.__name__} exceeded timeout."
+                        )
                 else:
-                    logging.info(f"Thread for {target.__name__} completed successfully.")
+                    logging.info(
+                        f"Thread for {target.__name__} completed successfully."
+                    )
 
             except Exception as e:
                 logging.error(f"Thread {target.__name__} failed: {e}")
@@ -589,7 +600,9 @@ class AFSUtility:
 
         # Create and track the thread
         retries = 0
-        thread = threading.Thread(target=thread_wrapper, daemon=True)  # Daemon thread to ensure it exits with the main program
+        thread = threading.Thread(
+            target=thread_wrapper, daemon=True
+        )  # Daemon thread to ensure it exits with the main program
         with self.lock:
             self.active_threads.append(thread)
         thread.start()
@@ -960,7 +973,9 @@ class AFSUtility:
 
     def _create_new_afs_archive(self):
         """Creates a new AFS archive, ensuring only files with valid magic headers are included, with optimizations for speed."""
-        folder_path = filedialog.askdirectory(title="Select Folder with Files for New AFS Archive")
+        folder_path = filedialog.askdirectory(
+            title="Select Folder with Files for New AFS Archive"
+        )
         if not folder_path:
             logging.info("No folder selected for AFS archive creation.")
             return
@@ -985,18 +1000,20 @@ class AFSUtility:
 
         # If invalid files are detected, stop the process and notify the user
         if invalid_files:
-            logging.error(f"Invalid files detected: {', '.join(invalid_files)}. Only files with valid headers are allowed.")
+            logging.error(
+                f"Invalid files detected: {', '.join(invalid_files)}. Only files with valid headers are allowed."
+            )
             messagebox.showerror(
                 "Invalid Files Found",
                 f"The following files do not have valid ADX or SFD magic headers:\n{', '.join(invalid_files)}"
-                "\n\nOnly files with headers matching ADX (0x80 0x00) or SFD (0x00 0x00) are allowed."
+                "\n\nOnly files with headers matching ADX (0x80 0x00) or SFD (0x00 0x00) are allowed.",
             )
             return
 
         output_file = filedialog.asksaveasfilename(
             title="Save New AFS Archive As",
             defaultextension=".afs",
-            filetypes=[("CRIWare Archive File System", "*.afs")]
+            filetypes=[("CRIWare Archive File System", "*.afs")],
         )
         if not output_file:
             logging.info("AFS archive creation canceled by user.")
@@ -1005,7 +1022,11 @@ class AFSUtility:
         logging.info(f"Creating new AFS archive at: {output_file}")
 
         # Collect file paths and prepare TOC entries
-        file_paths = [os.path.join(folder_path, f) for f in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, f))]
+        file_paths = [
+            os.path.join(folder_path, f)
+            for f in os.listdir(folder_path)
+            if os.path.isfile(os.path.join(folder_path, f))
+        ]
         toc_entries = []
         file_names = []
         file_data = []
@@ -1027,18 +1048,22 @@ class AFSUtility:
 
         # Step 2: Calculate footer pointer based on last file's data
         footer_pointer = pointer
-        toc_entries.append((footer_pointer, 0x20))  # Append footer as "last listing" in TOC
+        toc_entries.append(
+            (footer_pointer, 0x20)
+        )  # Append footer as "last listing" in TOC
 
         footer_entries = []
         for name, (file_pointer, file_size) in zip(file_names, toc_entries):
             # Capture metadata: filename, creation date, and TOC entries
             creation_date = datetime.datetime.now()
-            footer_entries.append({
-                "name": name,
-                "pointer": file_pointer,
-                "size": file_size,
-                "creation_date": creation_date
-            })
+            footer_entries.append(
+                {
+                    "name": name,
+                    "pointer": file_pointer,
+                    "size": file_size,
+                    "creation_date": creation_date,
+                }
+            )
 
         # Step 3: Write TOC and file data in batches with memory mapping
         try:
@@ -1046,7 +1071,9 @@ class AFSUtility:
             with open(output_file, "wb") as afs_file:
                 # Write the AFS magic bytes and file count
                 afs_file.write(b"AFS\x00")
-                afs_file.write(struct.pack("<I", len(file_paths)))  # Exclude footer from file count
+                afs_file.write(
+                    struct.pack("<I", len(file_paths))
+                )  # Exclude footer from file count
 
                 for toc_entry in toc_entries:
                     afs_file.write(struct.pack("<II", *toc_entry))
@@ -1086,12 +1113,21 @@ class AFSUtility:
                 afs_file.write(b"\x00" * ((0x800 - current_pos % 0x800) % 0x800))
 
             logging.info("New AFS archive created successfully.")
-            self.root.after(0, lambda: messagebox.showinfo("Success", "New AFS archive created successfully."))
+            self.root.after(
+                0,
+                lambda: messagebox.showinfo(
+                    "Success", "New AFS archive created successfully."
+                ),
+            )
 
         except Exception as e:
             logging.error(f"Failed to create AFS archive: {e}")
-            self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to create AFS archive: {e}"))
-
+            self.root.after(
+                0,
+                lambda: messagebox.showerror(
+                    "Error", f"Failed to create AFS archive: {e}"
+                ),
+            )
 
     def mass_extract(self):
         self.run_in_thread(self._mass_extract)
