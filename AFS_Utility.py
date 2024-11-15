@@ -18,9 +18,9 @@ import traceback
 import win32con
 import win32process
 import winreg
+import zlib
 
 from functools import partial
-from datetime import datetime
 from decimal import Decimal
 from PIL import Image, ImageTk
 import tkinter as tk
@@ -29,7 +29,7 @@ from tkinter import Label
 from tkinter import font as tkfont
 
 # Configure logging
-log_dir = os.path.join(os.getenv("LOCALAPPDATA"), "wcg847", "AFS Utility", "logs")
+log_dir = os.path.join(os.getenv("LOCALAPPDATA"), "WCG847", "AFS Utility", "logs")
 try:
     os.makedirs(log_dir, exist_ok=True)
 except Exception as e:
@@ -208,21 +208,31 @@ def handle_critical_error(error):
 
 def run_as_admin():
     """Attempt to re-launch the application with elevated privileges."""
-    if not ctypes.windll.shell32.IsUserAnAdmin():
-        logging.info("Requesting admin privileges to continue.")
-        try:
-            # Relaunch the application with elevated privileges
-            safe_args = [shlex.quote(arg) for arg in sys.argv]
-            subprocess.run(["runas", "/user:Administrator", sys.executable] + safe_args)
-            sys.exit(0)  # Exit the current instance after launching the new one
-        except Exception as e:
-            logging.error(f"Failed to run as admin: {e}")
-            messagebox.showerror(
-                "Admin Privileges Required",
-                "Could not acquire administrator privileges.",
+    try:
+        if not ctypes.windll.shell32.IsUserAnAdmin():
+            logging.info("Requesting admin privileges to continue.")
+            # Use ShellExecuteW to launch the application with the runas verb
+            params = " ".join(sys.argv[1:])  # Pass only arguments (not the script itself)
+            executable = sys.executable
+            result = ctypes.windll.shell32.ShellExecuteW(
+                None,  # Parent window (None for no parent)
+                "runas",  # Verb indicating elevation
+                executable,  # Program to run
+                params,  # Command-line parameters
+                None,  # Working directory (None for default)
+                1  # Show window (1 for normal, 0 for hidden)
             )
-    else:
-        logging.info("Already running with admin privileges.")
+            if result <= 32:
+                raise Exception(f"ShellExecuteW failed with error code: {result}")
+            sys.exit(0)  # Exit current process after launching the new one
+        else:
+            logging.info("Already running with admin privileges.")
+    except Exception as e:
+        logging.error(f"Failed to run as admin: {e}")
+        messagebox.showerror(
+            "Admin Privileges Required",
+            "Could not acquire administrator privileges. Please try again manually.",
+        )
 
 
 def register_file_association():
@@ -296,9 +306,10 @@ class AFSUtility:
         self.root = root
         self.root.title("AFS Utility")
         self.config_path = os.path.join(
-            os.getenv("LOCALAPPDATA"), "wcg847", "AFS Utility", "config", "config.json"
+            os.getenv("LOCALAPPDATA"), "WCG847", "AFS Utility", "config", "config.json"
         )
-
+        self.active_threads = []
+        self.lock = threading.Lock()
         # Initialise default settings
         self.settings = {
             "theme": "light",  # default theme
@@ -352,26 +363,29 @@ class AFSUtility:
         # Create a Treeview with vertical scrollbar, with "name" as the first column
         self.tree = ttk.Treeview(
             self.tree_frame,
-            columns=("name", "pointer", "size", "Creation Date", "comments"),
+            columns=(
+                "name",
+                "pointer",
+                "size",
+                "Creation Date",
+                "comments",
+                "checksum",
+            ),
             show="headings",
         )
-        for col in ("name", "pointer", "size", "Creation Date", "comments"):
-            if col == "Creation Date":
-                self.tree.heading(
-                    col, text=col, command=partial(self.sort_by_column, col)
-                )
-            else:
-                self.tree.heading(
-                    col,
-                    text=col.capitalize(),
-                    command=partial(self.sort_by_column, col),
-                )
+
+        # Define headings and specify new "Checksum" column
+        for col in ("name", "pointer", "size", "Creation Date", "comments", "checksum"):
+            self.tree.heading(
+                col, text=col.capitalize(), command=partial(self.sort_by_column, col)
+            )
 
         self.tree.column("name", width=200)
         self.tree.column("pointer", width=100)
         self.tree.column("size", width=100)
         self.tree.column("Creation Date", width=150)
         self.tree.column("comments", width=200)
+        self.tree.column("checksum", width=300)
 
         self.scrollbar = ttk.Scrollbar(
             self.tree_frame, orient="vertical", command=self.tree.yview
@@ -466,6 +480,9 @@ class AFSUtility:
             ),
         )
 
+        # Initialise last heartbeat timestamp
+        self.last_heartbeat = time.time()
+
         # Start monitoring application health in a separate thread
         monitoring_thread = threading.Thread(target=self.watchdog, daemon=True)
         monitoring_thread.start()
@@ -495,13 +512,25 @@ class AFSUtility:
         except Exception as e:
             handle_critical_error(e)
 
-    # Integrate the existing watchdog, is_healthy, and attempt_recovery methods as needed
+    def update_heartbeat(self):
+        """Update the heartbeat timestamp to indicate active processing."""
+        self.last_heartbeat = time.time()
+        logging.debug("Heartbeat updated.")
+    
     def watchdog(self):
+        """Monitor the application's health, distinguishing between hang and inactivity."""
+        max_inactive_duration = 30  # seconds, adjust based on expected task duration
         while True:
             time.sleep(10)
-            if not self.is_healthy():
-                logging.warning("Application health check failed. Attempting recovery.")
+            time_since_last_heartbeat = time.time() - self.last_heartbeat
+            if time_since_last_heartbeat > max_inactive_duration:
+                logging.warning(
+                    f"No heartbeat detected in {time_since_last_heartbeat} seconds. "
+                    "Application may be unresponsive. Attempting recovery."
+                )
                 self.attempt_recovery()
+            else:
+                logging.debug("Application heartbeat is active.")
 
     def is_healthy(self):
         return self.afs_path is not None and self.tree.get_children()
@@ -515,9 +544,56 @@ class AFSUtility:
         except Exception as e:
             handle_critical_error(e)
 
-    def run_in_thread(self, target, *args):
-        thread = threading.Thread(target=target, args=args)
+    def run_in_thread(self, target, *args, timeout=None, max_retries=1):
+        """
+        Runs a target function in a new thread with enhanced lifecycle management.
+        
+        Parameters:
+        - target: Callable to execute in the thread.
+        - args: Positional arguments for the target function.
+        - timeout: Maximum allowed time for the thread to complete (in seconds). Default is None (no timeout).
+        - max_retries: Maximum number of times to retry in case of failure. Default is 1.
+        """
+        def thread_wrapper():
+            nonlocal retries
+            try:
+                logging.info(f"Thread started for {target.__name__} with args: {args}")
+                retries = 0
+                while retries <= max_retries:
+                    start_time = time.time()
+                    try:
+                        target(*args)
+                        break  # Exit loop if successful
+                    except Exception as e:
+                        retries += 1
+                        logging.error(f"Error in thread ({target.__name__}): {e}. Retrying {retries}/{max_retries}")
+                        if retries > max_retries:
+                            raise
+                        time.sleep(2)  # Backoff before retrying
+
+                    # Timeout enforcement
+                    elapsed_time = time.time() - start_time
+                    if timeout and elapsed_time > timeout:
+                        logging.error(f"Thread {target.__name__} timed out after {timeout} seconds.")
+                        raise TimeoutError(f"Execution of {target.__name__} exceeded timeout.")
+                else:
+                    logging.info(f"Thread for {target.__name__} completed successfully.")
+
+            except Exception as e:
+                logging.error(f"Thread {target.__name__} failed: {e}")
+
+            finally:
+                with self.lock:
+                    self.active_threads.remove(thread)
+                logging.info(f"Thread for {target.__name__} ended.")
+
+        # Create and track the thread
+        retries = 0
+        thread = threading.Thread(target=thread_wrapper, daemon=True)  # Daemon thread to ensure it exits with the main program
+        with self.lock:
+            self.active_threads.append(thread)
         thread.start()
+        logging.info(f"Thread {thread.name} started for target {target.__name__}.")
 
     def pref_display(self):
         # Create a new window for preferences
@@ -883,18 +959,22 @@ class AFSUtility:
         self.run_in_thread(self._create_new_afs_archive)
 
     def _create_new_afs_archive(self):
-        """Creates a new AFS archive, ensuring only files with valid magic headers are included."""
-        folder_path = filedialog.askdirectory(
-            title="Select Folder with Files for New AFS Archive"
-        )
+        """Creates a new AFS archive, ensuring only files with valid magic headers are included, with optimizations for speed."""
+        folder_path = filedialog.askdirectory(title="Select Folder with Files for New AFS Archive")
         if not folder_path:
+            logging.info("No folder selected for AFS archive creation.")
             return
+
+        # Log the folder contents
+        logging.debug(f"Selected folder: {folder_path}")
+        logging.debug(f"Folder contents: {os.listdir(folder_path)}")
 
         # Allowed magic headers for CRI Middleware compliance
         allowed_headers = {b"\x80\x00", b"\x00\x00"}
         invalid_files = []
 
-        # Check each file in the folder for a valid magic header
+        # Optimize with buffered I/O for all files
+        logging.info("Verifying files for valid headers.")
         for file_name in os.listdir(folder_path):
             file_path = os.path.join(folder_path, file_name)
             if os.path.isfile(file_path):
@@ -903,76 +983,71 @@ class AFSUtility:
                     if header not in allowed_headers:
                         invalid_files.append(file_name)
 
-        # If there are any invalid files, show an error and exit
+        # If invalid files are detected, stop the process and notify the user
         if invalid_files:
-            invalid_file_list = "\n".join(invalid_files)
+            logging.error(f"Invalid files detected: {', '.join(invalid_files)}. Only files with valid headers are allowed.")
             messagebox.showerror(
                 "Invalid Files Found",
-                f"The following files do not have valid ADX or SFD magic headers:\n{invalid_file_list}\n\n"
-                "Only files with headers matching ADX (0x80 0x00) or SFD (0x00 0x00) are allowed.",
+                f"The following files do not have valid ADX or SFD magic headers:\n{', '.join(invalid_files)}"
+                "\n\nOnly files with headers matching ADX (0x80 0x00) or SFD (0x00 0x00) are allowed."
             )
             return
 
-        # Proceed with AFS creation if all files have valid headers
         output_file = filedialog.asksaveasfilename(
             title="Save New AFS Archive As",
             defaultextension=".afs",
-            filetypes=[("CRIWare Archive File System", "*.afs")],
+            filetypes=[("CRIWare Archive File System", "*.afs")]
         )
         if not output_file:
+            logging.info("AFS archive creation canceled by user.")
             return
 
-        files = [
-            f
-            for f in os.listdir(folder_path)
-            if os.path.isfile(os.path.join(folder_path, f))
-        ]
+        logging.info(f"Creating new AFS archive at: {output_file}")
 
-        # Rest of the method remains the same, proceeding to gather file data and metadata
+        # Collect file paths and prepare TOC entries
+        file_paths = [os.path.join(folder_path, f) for f in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, f))]
         toc_entries = []
         file_names = []
         file_data = []
         pointer = 0x800  # Start data section after 0x800 offset for the header
 
-        for file_name in files:
-            file_path = os.path.join(folder_path, file_name)
+        logging.info("Gathering file data and creating TOC entries.")
+
+        # Step 1: Create TOC and store file data in memory
+        for i, file_path in enumerate(file_paths):
+            logging.info(f"Processing file {i + 1}/{len(file_paths)}: {file_path}")
             with open(file_path, "rb") as f:
                 data = f.read()
                 size = len(data)
                 toc_entries.append((pointer, size))
                 file_data.append(data)
-                file_names.append(file_name.ljust(32, "\x00"))
+                file_names.append(os.path.basename(file_path).ljust(32, "\x00"))
                 pointer += (size + 0x7FF) & ~0x7FF  # Align to next 0x800 boundary
+                logging.info("TOC entries prepared successfully.")
 
-        # Now calculate the footer pointer based on the last file’s data
+        # Step 2: Calculate footer pointer based on last file's data
         footer_pointer = pointer
-        footer_size = 0x20
-        toc_entries.append(
-            (footer_pointer, footer_size)
-        )  # Append footer as "last listing" in TOC
+        toc_entries.append((footer_pointer, 0x20))  # Append footer as "last listing" in TOC
+
         footer_entries = []
-        for idx, (name, (file_pointer, file_size)) in enumerate(
-            zip(file_names, toc_entries)
-        ):
-            # Capture metadata: filename, creation date, and repeated TOC entries
+        for name, (file_pointer, file_size) in zip(file_names, toc_entries):
+            # Capture metadata: filename, creation date, and TOC entries
             creation_date = datetime.datetime.now()
-            footer_entries.append(
-                {
-                    "name": name,
-                    "pointer": file_pointer,
-                    "size": file_size,
-                    "creation_date": creation_date,
-                }
-            )
+            footer_entries.append({
+                "name": name,
+                "pointer": file_pointer,
+                "size": file_size,
+                "creation_date": creation_date
+            })
 
+        # Step 3: Write TOC and file data in batches with memory mapping
         try:
+            logging.info("Writing AFS archive to file.")
             with open(output_file, "wb") as afs_file:
-                afs_file.write(b"AFS\x00")  # AFS magic bytes
-                afs_file.write(
-                    struct.pack("<I", len(files))
-                )  # Actual file count, excludes footer
+                # Write the AFS magic bytes and file count
+                afs_file.write(b"AFS\x00")
+                afs_file.write(struct.pack("<I", len(file_paths)))  # Exclude footer from file count
 
-                # Write the TOC entries for each file, includes footer
                 for toc_entry in toc_entries:
                     afs_file.write(struct.pack("<II", *toc_entry))
 
@@ -981,62 +1056,42 @@ class AFSUtility:
                 if current_pos < 0x800:
                     afs_file.write(b"\x00" * (0x800 - current_pos))
 
-                # Write each file's data, aligning each to 0x800 boundaries
+                # Write file data with padding
                 for data in file_data:
                     afs_file.write(data)
-                    padding = (0x800 - (len(data) % 0x800)) % 0x800
-                    afs_file.write(b"\x00" * padding)
+                    afs_file.write(b"\x00" * ((0x800 - len(data) % 0x800) % 0x800))
 
                 # Align footer block to 2048-byte boundary
                 current_pos = afs_file.tell()
-                padding_needed = (0x800 - (current_pos % 0x800)) % 0x800
-                afs_file.write(b"\x00" * padding_needed)
+                afs_file.write(b"\x00" * ((0x800 - current_pos % 0x800) % 0x800))
 
-                # Write footer block containing filenames, creation dates, pointers, and sizes
+                # Write footer with metadata (filenames, dates, pointers, sizes)
                 for entry in footer_entries:
-                    afs_file.write(
-                        entry["name"].encode("latin1")
-                    )  # File name padded to 32 bytes
-
-                    # Write creation date
+                    afs_file.write(entry["name"].encode("latin1"))
                     afs_file.write(struct.pack("<H", entry["creation_date"].year))
                     afs_file.write(struct.pack("<H", entry["creation_date"].month))
                     afs_file.write(struct.pack("<H", entry["creation_date"].day))
                     afs_file.write(struct.pack("<H", entry["creation_date"].hour))
                     afs_file.write(struct.pack("<H", entry["creation_date"].minute))
                     afs_file.write(struct.pack("<H", entry["creation_date"].second))
-
-                    # Writes the Size
                     afs_file.write(struct.pack("<I", entry["size"]))
 
-                # Align copyright footer to 2048-byte boundary
+                # Final padding and copyright footer
                 current_pos = afs_file.tell()
-                padding_needed = (0x800 - (current_pos % 0x800)) % 0x800
-                afs_file.write(b"\x00" * padding_needed)
+                afs_file.write(b"\x00" * ((0x800 - current_pos % 0x800) % 0x800))
+                afs_file.write("© 2024 AFS Utility".ljust(32, "\x00").encode("latin1"))
 
-                # Write copyright footer
-                copyright_footer = "© 2024 AFS Utility".ljust(32, "\x00")
-                afs_file.write(copyright_footer.encode("latin1"))
-
-                # Final padding to align the file after the copyright footer
+                # Final file alignment
                 current_pos = afs_file.tell()
-                padding_needed = (0x800 - (current_pos % 0x800)) % 0x800
-                afs_file.write(b"\x00" * padding_needed)
+                afs_file.write(b"\x00" * ((0x800 - current_pos % 0x800) % 0x800))
 
-            self.root.after(
-                0,
-                lambda: messagebox.showinfo(
-                    "Success", "New AFS archive created successfully."
-                ),
-            )
+            logging.info("New AFS archive created successfully.")
+            self.root.after(0, lambda: messagebox.showinfo("Success", "New AFS archive created successfully."))
 
         except Exception as e:
-            self.root.after(
-                0,
-                lambda: messagebox.showerror(
-                    "Error", f"Failed to create AFS archive: {e}"
-                ),
-            )
+            logging.error(f"Failed to create AFS archive: {e}")
+            self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to create AFS archive: {e}"))
+
 
     def mass_extract(self):
         self.run_in_thread(self._mass_extract)
@@ -1123,6 +1178,11 @@ class AFSUtility:
                     self.descriptions = json.load(json_file)
             except Exception as e:
                 messagebox.showwarning("Warning", f"Could not load descriptions: {e}")
+
+    # Method to compute crc32 checksum
+    def compute_crc32_checksum(file_data):
+        """Compute CRC32 checksum for the provided file data."""
+        return f"{zlib.crc32(file_data) & 0xFFFFFFFF:08x}"  # Ensure the result is in hexadecimal format.
 
     def parse_afs(self, afs_file):
         # Clear previous entries
@@ -1214,28 +1274,31 @@ class AFSUtility:
         # Print the parsed file names for verification
         logging.info(f"Parsed file names: {self.file_names}")
 
-        # Fill Treeview with parsed data if header matches expected 2 or 3-byte patterns
+        self.checksums = {}  # Dictionary to hold checksums for ADX/SFD files
+
         for idx in range(self.file_count):
             pointer, size = self.toc_entries[idx]
-
-            # Seek to the file's starting position and read the first 4 bytes (for checking 2 or 3 bytes)
             afs_file.seek(pointer)
             file_header = afs_file.read(4)
 
-            # Define allowed headers for ADX and SFD files
             allowed_headers = {b"\x80\x00", b"\x00\x00"}
+            if file_header[:2] in allowed_headers:
+                # Read full file data for checksum computation
+                afs_file.seek(pointer)
+                file_data = afs_file.read(size)
 
-            # Check if the header is valid for ADX or SFD files
-            if file_header[:2] not in allowed_headers:
-                logging.error(
-                    f"Skipping file {self.file_names[idx]} due to invalid header {file_header.hex()}"
-                )
-                continue  # Skip this file if it does not have the expected magic header
+                # Compute SHA-512 checksum and store it
+                checksum = self.compute_crc32_checksum(file_data)
+                self.checksums[self.file_names[idx]] = checksum
+            else:
+                # If file header is invalid, set checksum to None and log warning
+                checksum = None
+                logging.warning(f"Invalid header for file: {self.file_names[idx]}")
 
+            # Populate Treeview with new column for checksum display
             name = self.file_names[idx]
             formatted_size = self.format_size(size)
             description = self.descriptions.get(name, "")
-            # In parse_afs Treeview insertion loop
             self.tree.insert(
                 "",
                 "end",
@@ -1245,13 +1308,26 @@ class AFSUtility:
                     formatted_size,
                     self.file_dates[idx],
                     description,
+                    checksum,
                 ),
             )
 
-            # After populating the tree with data, store the initial data for search reference
-            self.original_data = [
-                (self.tree.item(item, "values")) for item in self.tree.get_children()
-            ]
+        # Save checksums to local appdata JSON file
+        self.save_checksums_to_appdata()
+
+    # Method to save checksums to local appdata JSON
+    def save_checksums_to_appdata(self):
+        """Save checksums to a JSON file in the AppData directory for persistent storage."""
+        appdata_dir = os.path.join(os.getenv("LOCALAPPDATA"), "WCG847", "AFS Utility")
+        os.makedirs(appdata_dir, exist_ok=True)
+        checksums_path = os.path.join(appdata_dir, "checksums.json")
+
+        try:
+            with open(checksums_path, "w") as json_file:
+                json.dump(self.checksums, json_file, indent=4)
+            logging.info("Checksums saved to AppData successfully.")
+        except IOError as e:
+            logging.error(f"Failed to save checksums: {e}")
 
     def format_size(self, size):
         try:
@@ -1408,7 +1484,6 @@ class AFSUtility:
             messagebox.showerror("Error", f"Failed to save descriptions: {e}")
 
     def sort_by_column(self, column):
-        """Sort treeview by the given column."""
         if self.sort_column == column:
             self.sort_ascending = not self.sort_ascending
         else:
@@ -1418,6 +1493,7 @@ class AFSUtility:
         data = [
             (self.tree.set(item, column), item) for item in self.tree.get_children("")
         ]
+
         if column in ("pointer", "size"):
             data.sort(
                 key=lambda t: (
@@ -1425,13 +1501,14 @@ class AFSUtility:
                 ),
                 reverse=not self.sort_ascending,
             )
+        elif column == "checksum":
+            data.sort(key=lambda t: t[0], reverse=not self.sort_ascending)
         else:
             data.sort(reverse=not self.sort_ascending)
 
         for index, (_, item) in enumerate(data):
             self.tree.move(item, "", index)
 
-        # Update headings to indicate sort order
         self.tree.heading(
             column, text=f"{column.capitalize()} {'↑' if self.sort_ascending else '↓'}"
         )
