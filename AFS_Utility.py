@@ -515,24 +515,35 @@ class AFSUtility:
             handle_critical_error(e)
 
     def update_heartbeat(self):
-        """Update the heartbeat timestamp to indicate active processing."""
+        """Update the heartbeat timestamp periodically, even if there is no user input."""
         self.last_heartbeat = time.time()
         logging.debug("Heartbeat updated.")
 
     def watchdog(self):
-        """Monitor the application's health, distinguishing between hang and inactivity."""
-        max_inactive_duration = 30  # seconds, adjust based on expected task duration
+        """Monitor the application's health, distinguishing between lockup and inactivity."""
+        max_inactive_duration = 300  # 5 minutes
         while True:
             time.sleep(10)
             time_since_last_heartbeat = time.time() - self.last_heartbeat
             if time_since_last_heartbeat > max_inactive_duration:
                 logging.warning(
                     f"No heartbeat detected in {time_since_last_heartbeat} seconds. "
-                    "Application may be unresponsive. Attempting recovery."
+                    "Application may be unresponsive."
                 )
-                self.attempt_recovery()
+                # Instead of automatic recovery, ask the user
+                self.ask_for_manual_recovery()
             else:
                 logging.debug("Application heartbeat is active.")
+    
+    def ask_for_manual_recovery(self):
+        response = messagebox.askyesno(
+            "Application Not Responding",
+            "It seems the application has stopped responding. Do you want to attempt recovery?"
+        )
+        if response:
+            self.attempt_recovery()
+
+
 
     def is_healthy(self):
         return self.afs_path is not None and self.tree.get_children()
@@ -1216,140 +1227,149 @@ class AFSUtility:
                 messagebox.showwarning("Warning", f"Could not load descriptions: {e}")
 
     # Method to compute crc32 checksum
-    def compute_crc32_checksum(file_data):
+    def compute_crc32_checksum(self, file_data):
         """Compute CRC32 checksum for the provided file data."""
         return f"{zlib.crc32(file_data) & 0xFFFFFFFF:08x}"  # Ensure the result is in hexadecimal format.
 
     def parse_afs(self, afs_file):
-        # Clear previous entries
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+        try:
+            # Clear previous entries
+            for item in self.tree.get_children():
+                self.tree.delete(item)
 
-        # Verify and parse the AFS header
-        header = afs_file.read(4)
-        if header[:3] != b"AFS" or header[3] != 0x00:
-            messagebox.showerror(
-                "Invalid Format", "The file is not a valid CRIWare archive."
-            )
-            return
+            # Verify and parse the AFS header
+            header = afs_file.read(4)
+            if header[:3] != b"AFS" or header[3] != 0x00:
+                messagebox.showerror(
+                    "Invalid Format", "The file is not a valid CRIWare archive."
+                )
+                return
 
-        # Number of files in AFS
-        self.file_count = struct.unpack("<I", afs_file.read(4))[0]
+            # Number of files in AFS
+            self.file_count = struct.unpack("<I", afs_file.read(4))[0]
 
-        # Start of TOC
-        self.toc_entries = []
-        for _ in range(self.file_count):
-            pointer = struct.unpack("<I", afs_file.read(4))[0]
-            size = struct.unpack("<I", afs_file.read(4))[0]
-            self.toc_entries.append((pointer, size))
+            # Start of TOC
+            self.toc_entries = []
+            for _ in range(self.file_count):
+                pointer = struct.unpack("<I", afs_file.read(4))[0]
+                size = struct.unpack("<I", afs_file.read(4))[0]
+                self.toc_entries.append((pointer, size))
 
-        # Calculate expected footer start location
-        last_entry_pointer, last_entry_size = self.toc_entries[-1]
-        expected_footer_start = last_entry_pointer + last_entry_size
+            # Calculate expected footer start location
+            last_entry_pointer, last_entry_size = self.toc_entries[-1]
+            expected_footer_start = last_entry_pointer + last_entry_size
 
-        # Align to nearest 0x800 (2048) boundary if necessary
-        if expected_footer_start % 0x800 != 0:
-            aligned_footer_start = (expected_footer_start + 0x800) & ~0x7FF
-            logging.info(
-                f"Non-aligned footer detected. Aligning to nearest 0x800 boundary."
-            )
-            logging.info(f"Adjusted footer start: 0x{aligned_footer_start:X}")
-            expected_footer_start = aligned_footer_start
-        else:
-            logging.info(f"Footer is already aligned at: 0x{expected_footer_start:X}")
-
-        afs_file.seek(expected_footer_start)
-
-        # File names, dates, and sizes storage
-        self.file_names = []
-        self.file_dates = []  # List to store parsed dates
-        self.file_sizes = []  # List to store parsed file sizes
-
-        default_date = datetime(1970, 1, 1, 0, 0, 0)  # Define default date
-
-        for _ in range(self.file_count):
-            # File name parsing
-            name = afs_file.read(0x20).decode("latin1").strip("\x00")
-            self.file_names.append(name)
-
-            try:
-                # Read the creation date (formatted as YYMMDDHHMMSS in 2 bytes each)
-                year = struct.unpack("<H", afs_file.read(2))[0]
-                month = struct.unpack("<H", afs_file.read(2))[0]
-                day = struct.unpack("<H", afs_file.read(2))[0]
-                hour = struct.unpack("<H", afs_file.read(2))[0]
-                minute = struct.unpack("<H", afs_file.read(2))[0]
-                second = struct.unpack("<H", afs_file.read(2))[0]
-
-                # Attempt to create a date object, defaulting to the specified date if invalid
-                file_date = datetime(year, month, day, hour, minute, second)
-            except (ValueError, OverflowError):
-                # If an error occurs, use the default date
-                logging.warning(f"Invalid date for file '{name}', using default date.")
-                file_date = default_date
-
-            self.file_dates.append(file_date.strftime("%Y-%m-%d %H:%M:%S"))
-
-            # Read 4-byte file size
-            file_size = struct.unpack("<I", afs_file.read(4))[0]
-            self.file_sizes.append(file_size)
-
-        # Log parsed dates and sizes
-        logging.info(f"Parsed file dates: {self.file_dates}")
-        logging.info(f"Parsed file sizes: {self.file_sizes}")
-
-        # Verify file names were parsed correctly
-        if len(self.file_names) != self.file_count:
-            messagebox.showerror(
-                "Parsing Error",
-                "The number of file names does not match the file count.",
-            )
-            logging.error(f"The number of file names does not match the file count.")
-            return
-
-        # Print the parsed file names for verification
-        logging.info(f"Parsed file names: {self.file_names}")
-
-        self.checksums = {}  # Dictionary to hold checksums for ADX/SFD files
-
-        for idx in range(self.file_count):
-            pointer, size = self.toc_entries[idx]
-            afs_file.seek(pointer)
-            file_header = afs_file.read(4)
-
-            allowed_headers = {b"\x80\x00", b"\x00\x00"}
-            if file_header[:2] in allowed_headers:
-                # Read full file data for checksum computation
-                afs_file.seek(pointer)
-                file_data = afs_file.read(size)
-
-                # Compute SHA-512 checksum and store it
-                checksum = self.compute_crc32_checksum(file_data)
-                self.checksums[self.file_names[idx]] = checksum
+            # Align to nearest 0x800 (2048) boundary if necessary
+            if expected_footer_start % 0x800 != 0:
+                aligned_footer_start = (expected_footer_start + 0x800) & ~0x7FF
+                logging.info(
+                    f"Non-aligned footer detected. Aligning to nearest 0x800 boundary."
+                )
+                logging.info(f"Adjusted footer start: 0x{aligned_footer_start:X}")
+                expected_footer_start = aligned_footer_start
             else:
-                # If file header is invalid, set checksum to None and log warning
-                checksum = None
-                logging.warning(f"Invalid header for file: {self.file_names[idx]}")
+                logging.info(f"Footer is already aligned at: 0x{expected_footer_start:X}")
 
-            # Populate Treeview with new column for checksum display
-            name = self.file_names[idx]
-            formatted_size = self.format_size(size)
-            description = self.descriptions.get(name, "")
-            self.tree.insert(
-                "",
-                "end",
-                values=(
-                    name,
-                    str(pointer),
-                    formatted_size,
-                    self.file_dates[idx],
-                    description,
-                    checksum,
-                ),
-            )
+            afs_file.seek(expected_footer_start)
 
-        # Save checksums to local appdata JSON file
-        self.save_checksums_to_appdata()
+            # File names, dates, and sizes storage
+            self.file_names = []
+            self.file_dates = []  # List to store parsed dates
+            self.file_sizes = []  # List to store parsed file sizes
+
+            default_date = datetime.datetime(1970, 1, 1, 0, 0, 0)  # Define default date
+
+            for _ in range(self.file_count):
+                # File name parsing
+                name = afs_file.read(0x20).decode("latin1").strip("\x00")
+                self.file_names.append(name)
+
+                try:
+                    # Read the creation date (formatted as YYMMDDHHMMSS in 2 bytes each)
+                    year = struct.unpack("<H", afs_file.read(2))[0]
+                    month = struct.unpack("<H", afs_file.read(2))[0]
+                    day = struct.unpack("<H", afs_file.read(2))[0]
+                    hour = struct.unpack("<H", afs_file.read(2))[0]
+                    minute = struct.unpack("<H", afs_file.read(2))[0]
+                    second = struct.unpack("<H", afs_file.read(2))[0]
+
+                    # Attempt to create a date object, defaulting to the specified date if invalid
+                    file_date = datetime.datetime(year, month, day, hour, minute, second)
+                except (ValueError, OverflowError):
+                    # If an error occurs, use the default date
+                    logging.warning(f"Invalid date for file '{name}', using default date.")
+                    file_date = default_date
+
+                self.file_dates.append(file_date.strftime("%Y-%m-%d %H:%M:%S"))
+
+                # Read 4-byte file size
+                file_size = struct.unpack("<I", afs_file.read(4))[0]
+                self.file_sizes.append(file_size)
+
+            # Log parsed dates and sizes
+            logging.info(f"Parsed file dates: {self.file_dates}")
+            logging.info(f"Parsed file sizes: {self.file_sizes}")
+
+            # Verify file names were parsed correctly
+            if len(self.file_names) != self.file_count:
+                messagebox.showerror(
+                    "Parsing Error",
+                    "The number of file names does not match the file count.",
+                )
+                logging.error(f"The number of file names does not match the file count.")
+                return
+
+            # Print the parsed file names for verification
+            logging.info(f"Parsed file names: {self.file_names}")
+
+            self.checksums = {}  # Dictionary to hold checksums for ADX/SFD files
+
+            for idx in range(self.file_count):
+                pointer, size = self.toc_entries[idx]
+                afs_file.seek(pointer)
+                file_header = afs_file.read(4)
+
+                allowed_headers = {b"\x80\x00", b"\x00\x00"}
+                if file_header[:2] in allowed_headers:
+                    # Read full file data for checksum computation
+                    afs_file.seek(pointer)
+                    file_data = afs_file.read(size)
+
+                    # Compute SHA-512 checksum and store it
+                    checksum = self.compute_crc32_checksum(file_data)
+                    self.checksums[self.file_names[idx]] = checksum
+                else:
+                    # If file header is invalid, set checksum to None and log warning
+                    checksum = None
+                    logging.warning(f"Invalid header for file: {self.file_names[idx]}")
+
+                # Populate Treeview with new column for checksum display
+                name = self.file_names[idx]
+                formatted_size = self.format_size(size)
+                description = self.descriptions.get(name, "")
+                self.tree.insert(
+                    "",
+                    "end",
+                    values=(
+                        name,
+                        str(pointer),
+                        formatted_size,
+                        self.file_dates[idx],
+                        description,
+                        checksum,
+                    ),
+                )
+
+            # Save checksums to local appdata JSON file
+            self.save_checksums_to_appdata()
+
+        except Exception as e:
+            # Log the critical error, capture the stack trace
+            logging.critical(f"Critical error encountered during AFS parsing: {e}", exc_info=True)
+            # Optionally, show a message box with the error to the user
+            messagebox.showerror("Critical Error", f"An error occurred: {e}")
+
+    
 
     # Method to save checksums to local appdata JSON
     def save_checksums_to_appdata(self):
