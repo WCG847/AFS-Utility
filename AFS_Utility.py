@@ -530,20 +530,40 @@ class AFSUtility:
                     f"No heartbeat detected in {time_since_last_heartbeat} seconds. "
                     "Application may be unresponsive."
                 )
-                # Instead of automatic recovery, ask the user
-                self.ask_for_manual_recovery()
+                # Check for potential freeze
+                self.monitor_for_freeze()
             else:
                 logging.debug("Application heartbeat is active.")
-    
+
+    def monitor_for_freeze(self):
+        """Monitor CPU usage to detect if the application is frozen."""
+        try:
+            p = psutil.Process()
+            cpu_usage = p.cpu_percent(interval=1)
+            if (
+                cpu_usage < 5
+            ):  # Assumes the application is frozen if CPU usage is below 5%
+                logging.warning(
+                    "CPU usage is extremely low, indicating potential freeze."
+                )
+                self.ask_for_manual_recovery()
+            else:
+                logging.info(
+                    f"Application is responsive with CPU usage at {cpu_usage}%"
+                )
+        except Exception as e:
+            logging.error(f"Error while checking CPU usage: {e}")
+
     def ask_for_manual_recovery(self):
         response = messagebox.askyesno(
             "Application Not Responding",
-            "It seems the application has stopped responding. Do you want to attempt recovery?"
+            "It seems the application has stopped responding. Do you want to attempt recovery?",
         )
         if response:
             self.attempt_recovery()
-
-
+        else:
+            logging.error("User opted not to attempt recovery. Exiting.")
+            sys.exit(1)
 
     def is_healthy(self):
         return self.afs_path is not None and self.tree.get_children()
@@ -1268,7 +1288,9 @@ class AFSUtility:
                 logging.info(f"Adjusted footer start: 0x{aligned_footer_start:X}")
                 expected_footer_start = aligned_footer_start
             else:
-                logging.info(f"Footer is already aligned at: 0x{expected_footer_start:X}")
+                logging.info(
+                    f"Footer is already aligned at: 0x{expected_footer_start:X}"
+                )
 
             afs_file.seek(expected_footer_start)
 
@@ -1294,10 +1316,14 @@ class AFSUtility:
                     second = struct.unpack("<H", afs_file.read(2))[0]
 
                     # Attempt to create a date object, defaulting to the specified date if invalid
-                    file_date = datetime.datetime(year, month, day, hour, minute, second)
+                    file_date = datetime.datetime(
+                        year, month, day, hour, minute, second
+                    )
                 except (ValueError, OverflowError):
                     # If an error occurs, use the default date
-                    logging.warning(f"Invalid date for file '{name}', using default date.")
+                    logging.warning(
+                        f"Invalid date for file '{name}', using default date."
+                    )
                     file_date = default_date
 
                 self.file_dates.append(file_date.strftime("%Y-%m-%d %H:%M:%S"))
@@ -1316,7 +1342,9 @@ class AFSUtility:
                     "Parsing Error",
                     "The number of file names does not match the file count.",
                 )
-                logging.error(f"The number of file names does not match the file count.")
+                logging.error(
+                    f"The number of file names does not match the file count."
+                )
                 return
 
             # Print the parsed file names for verification
@@ -1365,11 +1393,11 @@ class AFSUtility:
 
         except Exception as e:
             # Log the critical error, capture the stack trace
-            logging.critical(f"Critical error encountered during AFS parsing: {e}", exc_info=True)
+            logging.critical(
+                f"Critical error encountered during AFS parsing: {e}", exc_info=True
+            )
             # Optionally, show a message box with the error to the user
             messagebox.showerror("Critical Error", f"An error occurred: {e}")
-
-    
 
     # Method to save checksums to local appdata JSON
     def save_checksums_to_appdata(self):
