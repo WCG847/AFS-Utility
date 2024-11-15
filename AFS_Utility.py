@@ -972,7 +972,7 @@ class AFSUtility:
         self.run_in_thread(self._create_new_afs_archive)
 
     def _create_new_afs_archive(self):
-        """Creates a new AFS archive, ensuring only files with valid magic headers are included, with optimizations for speed."""
+        """Creates a new AFS archive, ensuring only files with valid magic headers are included, with optimisations for speed."""
         folder_path = filedialog.askdirectory(
             title="Select Folder with Files for New AFS Archive"
         )
@@ -988,7 +988,7 @@ class AFSUtility:
         allowed_headers = {b"\x80\x00", b"\x00\x00"}
         invalid_files = []
 
-        # Optimize with buffered I/O for all files
+        # Optimise with buffered I/O for all files
         logging.info("Verifying files for valid headers.")
         for file_name in os.listdir(folder_path):
             file_path = os.path.join(folder_path, file_name)
