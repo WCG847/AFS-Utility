@@ -350,8 +350,8 @@ class ErrorCode:
         E9040830 = ErrorInfo("E9040830", "'adxf' is NULL. (ADXF_GetNumReqSct)")
         E9040831 = ErrorInfo("E9040831", "'adxf' is NULL. (ADXF_GetNumReadSct)")
         E9040832 = ErrorInfo("E9040832", "'adxf' is NULL. (ADXF_GetStat)")
-        E9040828 = ErrorInfo("E9040828", "'ptid' is range outside.")
-        E9040828 = ErrorInfo("E9040828", "'flid' is range outside.")
+        E9040828_PTID = ErrorInfo("E9040828", "'ptid' is range outside.")
+        E9040828_FLID = ErrorInfo("E9040828", "'flid' is range outside.")
         E0041201 = ErrorInfo("E0041201", "state is reading. (ADXF_SetReqRdSct)")
 
     class ADXT(Enum):
