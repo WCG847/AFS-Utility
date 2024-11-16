@@ -309,7 +309,7 @@ ErrorInfo = namedtuple("ErrorInfo", ["code", "message"])
 
 class ErrorCode:
     """
-    A centralized class to manage error codes and their associated descriptive messages
+    A centralised class to manage error codes and their associated descriptive messages
     for different modules (ADXF, ADXT). This design ensures structured mapping, dynamic
     retrieval, and maintainability.
     """
