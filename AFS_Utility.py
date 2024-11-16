@@ -20,6 +20,9 @@ import win32process
 import winreg
 import zlib
 
+from enum import Enum
+from collections import namedtuple
+from typing import Optional
 from functools import partial
 from decimal import Decimal
 from PIL import Image, ImageTk
@@ -301,7 +304,67 @@ def register_file_association():
             "File Association Error",
             "Unable to complete file association setup. Please check permissions or try again.",
         )
+# Define a namedtuple for structured error information
+ErrorInfo = namedtuple("ErrorInfo", ["code", "message"])
 
+class ErrorCode:
+    """
+    A centralized class to manage error codes and their associated descriptive messages
+    for different modules (ADXF, ADXT). This design ensures structured mapping, dynamic
+    retrieval, and maintainability.
+    """
+
+    class ADXF(Enum):
+        """
+        Error codes for the ADXF module with their associated descriptions.
+        """
+        E9040801 = ErrorInfo("E9040801", "Partition ID is out of range. (adxf_ChkPrmPt)")
+        E9040802 = ErrorInfo("E9040802", "'ptinfo' is NULL. (adxf_ChkPrmPt)")
+        E1110701 = ErrorInfo("E1110701", "'tmpbuf' is null. (load partition)")
+        E1110702 = ErrorInfo("E1110702", "'tbsize' <= 0. (load partition)")
+
+    class ADXT(Enum):
+        """
+        Error codes for the ADXT module with their associated descriptions.
+        """
+        E02041201 = ErrorInfo("E02041201", "NULL pointer specified. (ADXT_GetHdrInfo)")
+        E02041202 = ErrorInfo("E02041202", "Cannot get header information. (ADXT_GetHdrInfo)")
+        E02080848 = ErrorInfo("E02080848", "ADXT_EntryFnameRange: parameter error")
+
+    @classmethod
+    def get_error_message(cls, code: str) -> str:
+        """
+        Retrieve the descriptive message associated with a given error code.
+        
+        :param code: The error code as a string.
+        :return: The descriptive error message or 'Unknown error code.' if not found.
+        """
+        error_info = cls.get_error_info(code)
+        return error_info.message if error_info else "Unknown error code."
+
+    @classmethod
+    def get_error_info(cls, code: str) -> Optional[ErrorInfo]:
+        """
+        Retrieve the full error information (code and message) associated with a given error code.
+        
+        :param code: The error code as a string.
+        :return: The `ErrorInfo` object or `None` if not found.
+        """
+        for module in (cls.ADXF, cls.ADXT):
+            for member in module:
+                if member.value.code == code:
+                    return member.value
+        return None
+
+    @classmethod
+    def validate_error_code(cls, code: str) -> bool:
+        """
+        Validate if a given error code exists in any of the defined error modules.
+        
+        :param code: The error code as a string.
+        :return: Boolean indicating whether the error code exists.
+        """
+        return cls.get_error_info(code) is not None
 
 class AFSUtility:
     def __init__(self, root):
