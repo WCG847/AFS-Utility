@@ -1121,26 +1121,38 @@ class AFSUtility:
         # Allowed magic headers for CRI Middleware compliance
         allowed_headers = {b"\x80\x00", b"\x00\x00"}
         invalid_files = []
+        oversized_files = []
 
         # Optimise with buffered I/O for all files
-        logging.info("Verifying files for valid headers.")
+        logging.info("Verifying files for valid headers and size constraints.")
         for file_name in os.listdir(folder_path):
             file_path = os.path.join(folder_path, file_name)
             if os.path.isfile(file_path):
                 with open(file_path, "rb") as file:
                     header = file.read(2)
-                    if header not in allowed_headers:
+                    file.seek(0, os.SEEK_END)  # Move to end of file to get size
+                    file_size = file.tell()
+                    if file_size >= 134_217_728:  # Check if file is 128MB or larger
+                        oversized_files.append(file_name)
+                    elif header not in allowed_headers:
                         invalid_files.append(file_name)
 
-        # If invalid files are detected, stop the process and notify the user
-        if invalid_files:
-            logging.error(
-                f"Invalid files detected: {', '.join(invalid_files)}. Only files with valid headers are allowed."
-            )
+        # If invalid or oversized files are detected, stop the process and notify the user
+        if invalid_files or oversized_files:
+            error_messages = []
+            if invalid_files:
+                error_messages.append(
+                    f"{ErrorCode.get_error_message('E02080848')}: {', '.join(invalid_files)}"
+                )
+            if oversized_files:
+                error_messages.append(
+                    f"{ErrorCode.get_error_message('E2122501')}: {', '.join(oversized_files)}"
+                )
+
+            logging.error("\n".join(error_messages))
             messagebox.showerror(
                 "Invalid Files Found",
-                f"The following files do not have valid ADX or SFD magic headers:\n{', '.join(invalid_files)}"
-                "\n\nOnly files with headers matching ADX (0x80 0x00) or SFD (0x00 0x00) are allowed.",
+                "\n\n".join(error_messages),
             )
             return
 
