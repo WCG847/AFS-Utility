@@ -304,8 +304,11 @@ def register_file_association():
             "File Association Error",
             "Unable to complete file association setup. Please check permissions or try again.",
         )
+
+
 # Define a namedtuple for structured error information
 ErrorInfo = namedtuple("ErrorInfo", ["code", "message"])
+
 
 class ErrorCode:
     """
@@ -318,7 +321,10 @@ class ErrorCode:
         """
         Error codes for the ADXF module with their associated descriptions.
         """
-        E9040801 = ErrorInfo("E9040801", "Partition ID is out of range. (adxf_ChkPrmPt)")
+
+        E9040801 = ErrorInfo(
+            "E9040801", "Partition ID is out of range. (adxf_ChkPrmPt)"
+        )
         E9040802 = ErrorInfo("E9040802", "'ptinfo' is NULL. (adxf_ChkPrmPt)")
         E1110701 = ErrorInfo("E1110701", "'tmpbuf' is null. (load partition)")
         E1110702 = ErrorInfo("E1110702", "'tbsize' <= 0. (load partition)")
@@ -327,9 +333,13 @@ class ErrorCode:
         E0041303 = ErrorInfo("E0041303", "illegal parameter 'ptid'. (ADXF_GetPtStat)")
         E0040701 = ErrorInfo("E0040701", "Illegal format (not AFS). (ADXF_GetPtStat)")
         E0040702 = ErrorInfo("E0040702", "Illegal number of file. (ADXF_GetPtStat)")
-        E2122501 = ErrorInfo("E2122501", "AFS file has 128MB or more of inside file. (ADXF_GetPtStat)")
+        E2122501 = ErrorInfo(
+            "E2122501", "AFS file has 128MB or more of inside file. (ADXF_GetPtStat)"
+        )
         E04041201 = ErrorInfo("E04041201", "not enough ADXF handle. (adxf_CreateAdxFs)")
-        E02111001 = ErrorInfo("E02111001", "can't create stm handle. (adxf_CreateAdxFs)")
+        E02111001 = ErrorInfo(
+            "E02111001", "can't create stm handle. (adxf_CreateAdxFs)"
+        )
         E9081901 = ErrorInfo("E9081901", "illegal parameter fname=null. (ADXF_Open)")
         E9040811 = ErrorInfo("E9040811", "'adxf' is NULL. (ADXF_ReadSj32)")
         E9040812 = ErrorInfo("E9040812", "'nsct' is negative. (ADXF_ReadSj32)")
@@ -358,8 +368,11 @@ class ErrorCode:
         """
         Error codes for the ADXT module with their associated descriptions.
         """
+
         E02041201 = ErrorInfo("E02041201", "NULL pointer specified. (ADXT_GetHdrInfo)")
-        E02041202 = ErrorInfo("E02041202", "Cannot get header information. (ADXT_GetHdrInfo)")
+        E02041202 = ErrorInfo(
+            "E02041202", "Cannot get header information. (ADXT_GetHdrInfo)"
+        )
         E02080848 = ErrorInfo("E02080848", "ADXT_EntryFnameRange: parameter error")
         E4063001 = ErrorInfo("E4063001", "Can't entry file")
         E02080855 = ErrorInfo("E02080855", "ADXT_EntryAfs: parameter error")
@@ -375,7 +388,7 @@ class ErrorCode:
     def get_error_message(cls, code: str) -> str:
         """
         Retrieve the descriptive message associated with a given error code.
-        
+
         :param code: The error code as a string.
         :return: The descriptive error message or 'Unknown error code.' if not found.
         """
@@ -386,7 +399,7 @@ class ErrorCode:
     def get_error_info(cls, code: str) -> Optional[ErrorInfo]:
         """
         Retrieve the full error information (code and message) associated with a given error code.
-        
+
         :param code: The error code as a string.
         :return: The `ErrorInfo` object or `None` if not found.
         """
@@ -400,11 +413,12 @@ class ErrorCode:
     def validate_error_code(cls, code: str) -> bool:
         """
         Validate if a given error code exists in any of the defined error modules.
-        
+
         :param code: The error code as a string.
         :return: Boolean indicating whether the error code exists.
         """
         return cls.get_error_info(code) is not None
+
 
 class AFSUtility:
     def __init__(self, root):
